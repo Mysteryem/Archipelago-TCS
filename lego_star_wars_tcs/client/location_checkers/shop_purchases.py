@@ -66,12 +66,21 @@ def _characters_to_shop_address() -> dict[MemoryOffset, dict[BitMask, ApLocation
 def _extras_to_shop_address() -> dict[MemoryOffset, dict[BitMask, ApLocationId]]:
     """Purchase <extra> shop ID -> AP Location ID"""
     per_byte: dict[MemoryOffset, dict[BitMask, ApLocationId]] = {}
+    # The score modifiers are not Archipelago items currently, but there are still locations for purchasing them from
+    # the shop.
+    score_modifiers = {
+        EXTRAS_BY_NAME["Score x2"],
+        EXTRAS_BY_NAME["Score x4"],
+        EXTRAS_BY_NAME["Score x6"],
+        EXTRAS_BY_NAME["Score x8"],
+        EXTRAS_BY_NAME["Score x10"],
+    }
     for extra_data in EXTRAS_BY_NAME.values():
         if extra_data.name == "Adaptive Difficulty":
             # Not present in the shop because it is always unlocked. It is also fortunately found in memory after all
             # the purchasable Extras, so there is no awkward skipping of memory to skip over Adaptive Difficulty.
             continue
-        if extra_data.code == -1:
+        if extra_data.code == -1 and extra_data not in score_modifiers:
             # Not implemented yet.
             continue
         byte_offset = extra_data.extra_number // 8

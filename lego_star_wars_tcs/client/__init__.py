@@ -991,8 +991,6 @@ async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext,
         # persistent client data if either the seed or slot name differ.
         last_save_file = ctx.last_loaded_save_file
         if current_save_file != last_save_file:
-            ctx.on_save_file_changed()
-
             last_slot_name = ctx.last_connected_slot
             last_seed_name = ctx.last_connected_seed_name
 

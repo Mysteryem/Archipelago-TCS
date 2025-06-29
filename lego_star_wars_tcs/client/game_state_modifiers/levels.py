@@ -74,6 +74,8 @@ class UnlockedChapterManager:
         temporary_story_completion: AbstractSet[ChapterArea]
         if (len(ctx.acquired_generic.unlocked_episodes) == 6
                 and ctx.acquired_characters.is_all_episodes_character_selected_in_shop(ctx)):
+            # TODO: Instead of this, temporarily change the unlock conditions for these characters to 0 Gold Bricks.
+            #  This will require finding the Collection data structs in memory at runtime.
             # In vanilla, the 'all episodes' characters unlock for purchase in the shop when the player has completed
             # every chapter in Story mode. In the AP randomizer, they need to be unlocked once all Episode Unlocks have
             # been acquired instead because completing all chapters in Story mode would basically never happen in a
