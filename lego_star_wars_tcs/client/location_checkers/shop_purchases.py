@@ -24,11 +24,10 @@ class BasePurchasesChecker(abc.ABC):
         self.remaining_max_byte = max(self.remaining_purchases.keys())
 
     async def check_extra_purchases(self, ctx: TCSContext, new_location_checks: list[int]):
-        server_checked_locations = ctx.checked_locations
         updated_remaining_purchases: dict[MemoryOffset, dict[BitMask, ApLocationId]] = {}
         for byte_offset, bit_mask_to_ap_id in self.remaining_purchases.items():
             updated_bit_to_ap_id: dict[BitMask, ApLocationId] = {bit: ap_id for bit, ap_id in bit_mask_to_ap_id.items()
-                                                                 if ap_id not in server_checked_locations}
+                                                                 if ctx.is_location_sendable(ap_id)}
             if updated_bit_to_ap_id:
                 updated_remaining_purchases[byte_offset] = updated_bit_to_ap_id
 

@@ -103,7 +103,7 @@ class FreePlayChapterCompletionChecker:
         current_level_id = ctx.read_current_level_id()
         completion_location_id = STATUS_LEVEL_ID_TO_AP_ID.get(current_level_id)
         if (completion_location_id is not None
-                and completion_location_id in ctx.missing_locations
+                and ctx.is_location_sendable(completion_location_id)
                 and is_in_free_play(ctx)
                 and is_status_level_completion(ctx)):
             self.sent_locations.add(completion_location_id)

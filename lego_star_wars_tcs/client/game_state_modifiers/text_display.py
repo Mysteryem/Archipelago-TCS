@@ -1,11 +1,11 @@
 import logging
-import pymem
+import re
+import struct
 from collections import deque
 from time import perf_counter_ns
 
 from . import GameStateUpdater
 from ..type_aliases import TCSContext
-from ...levels import STATUS_LEVEL_IDS
 
 
 logger = logging.getLogger("Client")
@@ -32,37 +32,16 @@ REBEL_TROOPER_NAME_TO_LANGUAGE = {
 # The number of bytes to look backwards from the anchor address is the size of the largest Rebel Trooper name.
 DOUBLE_SCORE_ZONE_TEXT_ANCHOR_LOOKBEHIND_BYTES = max(map(len, REBEL_TROOPER_NAME_TO_LANGUAGE.keys()))
 
-# "Double Score Zone!" is string number 87. "R2-D2" is string number 103.
-# These offsets provide the offset from the anchor pattern to the start of the "Double Score Zone!" string.
-# The offsets are the sum of bytes of each string, encoded in utf-8, in that 87-102 range, plus 1 b"\x00" byte between
-# each string.
-# Steam only lets me pick from English, French, Italian, German and Spanish, so I cannot test the others.
-LANGUAGE_TO_START_OFFSET = {
-    "ENGLISH": -482,
-    "FRENCH": -619,
-    "DANISH": -562,
-    "GERMAN": -643,
-    "ITALIAN": -670,
-    "JAPANESE": -769,
-    "POLISH": -696,  # Needs checking because string 92 is missing closing quotes
-    "RUSSIAN": -957,  # Needs checking because string 92 is missing both opening and closing quotes
-    "SPANISH": -639,
-}
-# If there is some problem with this means of determining the start offset, an alternative is to read bytes backwards
-# from the anchor pattern address, and count the number of null terminators (b"\x00"). The address of the 16th preceding
-# null terminator should be 1 byte before the start of the "Double Score Zone!" string.
+# "Double Score Zone!" is string number 87, "Rebel Trooper" is string number 102 and "R2-D2" is string number 103.
+DOUBLE_SCORE_ZONE_NUMBER = 87
+REBEL_TROOPER_NUMBER = 102
 
+# This is the number of bytes allocated for displaying messages.
+MAX_MESSAGE_LENGTH = 1024
 
 # Float value in seconds. The text will begin to fade out towards the end.
 # Note that values higher than 1.0 will flash more rapidly the higher the value.
 DOUBLE_SCORE_ZONE_TIMER_ADDRESS = 0x925040
-
-# Generally, when a message has been displayed by causing the "Double Score Zone!" text to appear, the timer value will
-# decrease rapidly over time. While the player is in a Double Score Zone, the timer value remains constant at 1.0.
-IN_DOUBLE_SCORE_ZONE_VALUE = 1.0  # 16256
-
-# Causes the "Double Score Zone!" message to display for about 4 seconds, though it fades out towards the end.
-DISPLAY_MESSAGE_VALUE = b"\x80\x40"  # 16512
 
 WAIT_BETWEEN_MESSAGES_SECONDS = 2
 WAIT_BETWEEN_MESSAGES_NS = WAIT_BETWEEN_MESSAGES_SECONDS * 1_000_000_000
@@ -87,7 +66,7 @@ IS_PLAYING_WHEN_0_ADDRESS = 0x297C0AC
 
 # 255: Cutscene
 # 1: Playing, Indy trailer, loading into Cantina, Title crawl
-# 2: In-level 'cutscene' where the player has no control
+# 2: In-level 'cutscene' where non-playable characters play an animation and the player has no control
 # 6: Bounty Hunter missions select
 # 7: In custom character creator
 # 8: In Cantina shop
@@ -97,7 +76,6 @@ GAME_STATE_ADDRESS = 0x925394
 
 
 class InGameTextDisplay(GameStateUpdater):
-    max_message_size: int = 0
     double_score_zone_string_address: int = -1
     vanilla_bytes: bytes = b""
     initialized: bool = False
@@ -117,11 +95,10 @@ class InGameTextDisplay(GameStateUpdater):
         process = ctx.game_process
         assert process is not None
         # Only one match is expected.
-        found_address = pymem.pattern.pattern_scan_all(process.process_handle,
-                                                       DOUBLE_SCORE_ZONE_TEXT_ANCHOR_PATTERN)
+        found_address = process.pattern_scan_all(DOUBLE_SCORE_ZONE_TEXT_ANCHOR_PATTERN)
         if found_address is None:
-            logger.warning("Text Display: Warning: Could not find the memory pattern needed for displaying item"
-                           " messages, item messages will not display in-game.")
+            logger.warning("Text Display: Warning: Could not find the memory pattern needed for displaying in-game"
+                           " messages, in-game messages will not display in-game.")
             return
 
         # Look backwards from the anchor to find the Rebel Trooper name and determine the game language and
@@ -130,17 +107,43 @@ class InGameTextDisplay(GameStateUpdater):
                                     DOUBLE_SCORE_ZONE_TEXT_ANCHOR_LOOKBEHIND_BYTES, raw=True)
         rebel_trooper_name = lookbehind.rpartition(b"\x00")[2]
         if rebel_trooper_name in REBEL_TROOPER_NAME_TO_LANGUAGE:
-            game_language = REBEL_TROOPER_NAME_TO_LANGUAGE[rebel_trooper_name]
+            rebel_trooper_address = found_address - len(rebel_trooper_name)
+            rebel_trooper_pointer_bytes = struct.pack("i", rebel_trooper_address)
 
-            start_offset = LANGUAGE_TO_START_OFFSET[game_language]
-            self.double_score_zone_string_address = found_address + LANGUAGE_TO_START_OFFSET[game_language]
-            self.max_message_size = -start_offset - len(rebel_trooper_name)
-            # If the client crashed before returning the bytes back to vanilla, these read bytes might not be
-            # vanilla anymore if the game has not been restarted but the client has.
-            self.vanilla_bytes = ctx.read_bytes(self.double_score_zone_string_address, self.max_message_size, raw=True)
+            # The pattern searches for the end of the localised string before R2-D2, so the R2-D2 address is one byte
+            # later.
+            r2d2_address = found_address + 1
+            r2d2_pointer_bytes = struct.pack("i", r2d2_address)
 
-            debug_logger.info("Text Display: Vanilla bytes as strings (should start with 'Double Score Zone!' and"
-                              " end with 'Princess Leia (Hoth)':")
+            # Now find the array in memory that stores the pointer to each of the localized text strings, by searching
+            # for consecutive pointers to these two addresses and then working backwards to the "Double Score Zone!"
+            # pointer.
+            rebel_trooper_in_pointer_array_pattern = rebel_trooper_pointer_bytes + r2d2_pointer_bytes
+            # The bytes have a chance to correspond to special characters, but it is the exact bytes that need to be
+            # searched for.
+            rebel_trooper_in_pointer_array_pattern = re.escape(rebel_trooper_in_pointer_array_pattern)
+            rebel_trooper_pointer_address = process.pattern_scan_all(rebel_trooper_in_pointer_array_pattern)
+            if rebel_trooper_pointer_address is None:
+                logger.warning("Text Display: Warning: Could not find the the pointer pattern needed for displaying"
+                               " in-game messages, in-game messages will not display in-game.")
+                return
+
+            pointer_address_difference = (REBEL_TROOPER_NUMBER - DOUBLE_SCORE_ZONE_NUMBER) * 4
+            double_score_zone_pointer_address = rebel_trooper_pointer_address - pointer_address_difference
+            double_score_zone_address = ctx.read_uint(double_score_zone_pointer_address, raw=True)
+            # 200 bytes should be ample to read the double score zone text for this
+            vanilla_double_score_zone_text_bytes = ctx.read_bytes(double_score_zone_address, 200, raw=True)
+            vanilla_double_score_zone_text = vanilla_double_score_zone_text_bytes.partition(b"\x00")[0] + b"\x00"
+
+            self.vanilla_bytes = vanilla_double_score_zone_text
+
+            self.double_score_zone_string_address = process.allocate(MAX_MESSAGE_LENGTH)
+
+            # Replace the game's pointer to the "Double Score Zone!" text with a pointer to the start of the newly
+            # allocated memory.
+            ctx.write_uint(double_score_zone_pointer_address, self.double_score_zone_string_address, raw=True)
+
+            debug_logger.info("Text Display: Vanilla Double Score Zone! string:")
             debug_logger.info(self.vanilla_bytes.replace(b"\x00", b"NULL\n").decode("utf-8", errors="replace"))
             self.messages_enabled = True
         else:
@@ -161,12 +164,11 @@ class InGameTextDisplay(GameStateUpdater):
     def _display_message(self, ctx: TCSContext, message: str,
                          next_message_delay_ns: int = WAIT_BETWEEN_MESSAGES_NS,
                          display_duration_s: float = 4.0):
-        # Write the message into the localized strings array, starting from the "Double Score Zone!" string.
+        # Write the message into the allocated memory for message strings.
         debug_logger.info("Text Display: Displaying in-game message '%s'", message)
         encoded = message.encode("utf-8", errors="replace")
-        encoded = encoded[:self.max_message_size - 1] + b"\x00"
-        encoded += self.vanilla_bytes[len(encoded):]
-        assert len(encoded) == len(self.vanilla_bytes)
+        # Limit the maximum size and ensure there is a null terminator.
+        encoded = encoded[:MAX_MESSAGE_LENGTH - 1] + b"\x00"
         self.write_bytes_to_double_score_zone(ctx, encoded)
         self.memory_dirty = True
 

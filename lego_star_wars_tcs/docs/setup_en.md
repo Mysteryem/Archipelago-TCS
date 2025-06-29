@@ -6,8 +6,8 @@ Work-in-progress.
 - PC Release of Lego Star Wars: The Complete Saga
   - Both the Steam version and GOG version are supported.
   - Running the 'steamless' executable is not expected to work currently, but is untested and should be supported in the
-  - The retail PC release is not expected to work currently, unless it is identical to the GOG version.
 future.
+  - The retail PC release is not expected to work currently, unless it is identical to the GOG version.
 - Archipelago
 - Windows Operating System
   - The client uses the pymem library, to read from/write to the game's memory, which only supports Windows.

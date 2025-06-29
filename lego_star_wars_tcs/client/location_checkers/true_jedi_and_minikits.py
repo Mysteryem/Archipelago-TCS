@@ -32,9 +32,13 @@ CURRENT_AREA_MINIKIT_COUNT_ADDRESS = 0x951238
 # There are then 2 unknown bytes
 # CURRENT_AREA_CURRENT_SESSION_MINIKIT_ARRAY = 0x955FD0
 
-CURRENT_AREA_STUDS_P1_ADDRESS = 0x855F38
-CURRENT_AREA_STUDS_P2_ADDRESS = 0x855F48
-CURRENT_AREA_STUDS_TRUE_JEDI = 0x87B994
+# Set to 1 when True Jedi is completed, in either Story mode or Free Play, 0 otherwise.
+CURRENT_AREA_TRUE_JEDI_COMPLETE_STORY_OR_FREE_PLAY_ADDRESS = 0x87B980
+# There is a second byte that only gets set from Free Play.
+# Completing True Jedi in either Story or Free Play sets both True Jedi bytes in the save data, so there is not much
+# point in only sending in-level True Jedi from Free Play mode, when the player could 'cheat' and do it in Story mode
+# instead.
+# CURRENT_AREA_TRUE_JEDI_COMPLETE_FREE_PLAY_ONLY_ADDRESS = 0x87B996
 
 
 class TrueJediAndMinikitChecker:
@@ -81,22 +85,12 @@ class TrueJediAndMinikitChecker:
 
         location_name = LEVEL_COMMON_LOCATIONS[shortname]["True Jedi"]
         location_id = LOCATION_NAME_TO_ID[location_name]
-        if location_id in ctx.checked_locations:
+        if not ctx.is_location_sendable(location_id):
             self.remaining_true_jedi_check_shortnames.remove(shortname)
             return
 
-        p1_studs = ctx.read_uint(CURRENT_AREA_STUDS_P1_ADDRESS)
-        p2_studs = ctx.read_uint(CURRENT_AREA_STUDS_P2_ADDRESS)
-        true_jedi_meter_studs = ctx.read_uint(CURRENT_AREA_STUDS_TRUE_JEDI)
-        # fixme: This will only send the True Jedi check on the next stud collected after completing True Jedi, when it
-        #  should instead send as soon as the True Jedi is completed.
-        #  The client can get the current Area ID, which means that if the structure of Areas in memory and the array of
-        #  area structures can be found, the True Jedi requirement could simply be looked up using the Area ID.
-        # The True Jedi value stops increasing once True Jedi has been completed, so once both P1's and P2's Studs are
-        # more than the True Jedi studs, it is known that True Jedi must have been completed.
-        if (p1_studs + p2_studs) > true_jedi_meter_studs:
-            location_name = LEVEL_COMMON_LOCATIONS[shortname]["True Jedi"]
-            location_id = LOCATION_NAME_TO_ID[location_name]
+        current_area_true_jedi_complete = ctx.read_uint(CURRENT_AREA_TRUE_JEDI_COMPLETE_STORY_OR_FREE_PLAY_ADDRESS)
+        if current_area_true_jedi_complete:
             new_location_checks.append(location_id)
             self.remaining_true_jedi_check_shortnames.remove(shortname)
 
@@ -114,7 +108,7 @@ class TrueJediAndMinikitChecker:
         updated_remaining_minikits: list[tuple[int, str]] = []
         for count, location_name in remaining_minikits:
             location_id = LOCATION_NAME_TO_ID[location_name]
-            if location_id not in ctx.checked_locations:
+            if ctx.is_location_sendable(location_id):
                 not_checked_minikit_checks.append(location_id)
                 updated_remaining_minikits.append((count, location_name))
         if updated_remaining_minikits:
@@ -150,7 +144,7 @@ class TrueJediAndMinikitChecker:
         for shortname in tuple(self.remaining_true_jedi_check_shortnames):
             location_name = LEVEL_COMMON_LOCATIONS[shortname]["True Jedi"]
             location_id = LOCATION_NAME_TO_ID[location_name]
-            if location_id in ctx.checked_locations:
+            if not ctx.is_location_sendable(location_id):
                 self.remaining_true_jedi_check_shortnames.remove(shortname)
                 continue
             true_jedi = get_bytes_for_short_name(shortname)[0]
@@ -163,7 +157,7 @@ class TrueJediAndMinikitChecker:
             updated_remaining_minikits: list[tuple[int, str]] = []
             for count, location_name in remaining_minikits:
                 location_id = LOCATION_NAME_TO_ID[location_name]
-                if location_id not in ctx.checked_locations:
+                if ctx.is_location_sendable(location_id):
                     not_checked_minikit_checks.append(location_id)
                     updated_remaining_minikits.append((count, location_name))
             if updated_remaining_minikits:

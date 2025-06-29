@@ -1,7 +1,40 @@
 import itertools
 from dataclasses import dataclass
 
-from Options import PerGameCommonOptions, StartInventoryPool, Choice, Range
+from Options import PerGameCommonOptions, StartInventoryPool, Choice, Range, NamedRange
+
+
+class MinikitGoalAmount(NamedRange):
+    """
+    The number of Minikits required to goal.
+
+    Each enabled episode chapter shuffles 10 Minikits into the item pool, which may be bundled to reduce the number
+    Minikit items in the item pool.
+    """
+    display_name = "Goal Minikits"
+    # todo: Add a named range as -1 to use a percentage, with that percentage controlled by a different option.
+    range_start = 10
+    default = 270
+    range_end = 360
+
+
+class MinikitBundleSize(Choice):
+    """
+    Minikit items in the item pool are bundled into items individually worth this number of Minikits.
+
+    Low bundle sizes can cause generation times to increase and are more likely to result in generation failing with a
+    FillError when generating Lego Star Wars: The Complete Saga on its own, or with other games that can struggle to
+    place all items.
+
+    Low bundle sizes also mean fewer filler studs in the item pool.
+    """
+    display_name = "Minikit Bundle Size"
+    option_individual = 1
+    alias_1 = 1
+    option_2 = 2
+    option_5 = 5
+    option_10 = 10
+    default = 5
 
 
 class StartingLevel(Choice):
@@ -143,6 +176,11 @@ class CheckedLocationMessages(Choice):
 @dataclass
 class LegoStarWarsTCSOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
+
+    minikit_goal_amount: MinikitGoalAmount
+    minikit_bundle_size: MinikitBundleSize
+
+    # Client behaviour.
     received_item_messages: ReceivedItemMessages
     checked_location_messages: CheckedLocationMessages
     # Future options, not implemented yet.

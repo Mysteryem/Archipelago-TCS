@@ -25,7 +25,7 @@ class BonusAreaCompletionChecker:
         updated_remaining_story_completion_checks = {}
         for address, ap_id in self.remaining_story_completion_checks.items():
             # Memory reads are assumed to be the slowest part
-            if ap_id in ctx.checked_locations:
+            if not ctx.is_location_sendable(ap_id):
                 # By skipping the location, it will not be added to the updated dictionary, so will not be checked in
                 # the future.
                 continue

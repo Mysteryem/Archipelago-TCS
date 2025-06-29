@@ -95,6 +95,8 @@ to be picked back up.
 Collecting studs while an in-game message is displayed will play the sound for collecting Blue/Purple studs, but the
 received value of the collected studs will be normal.
 
+In some cases, the Double Score Zone background audio can start playing when in-game messages are displayed.
+
 ### Bonus levels/Indiana Jones Trailer
 
 There is currently no way to prevent access to Bonus Levels/Indiana Jones Trailer without the logically required
@@ -111,8 +113,8 @@ may appear to be unlocked while making the purchase.
 
 ### Purchasing already unlocked Characters/Extras
 
-When attempting to purchase a Character/Extra that has already been unlocked, there may be a small delay before the
-purchase will be allowed.
+When attempting to purchase a Character/Extra that has already been unlocked, by receiving that Character/Extra from
+Archipelago, there may be a small delay before the purchase will be allowed.
 
 ### Purple Studs
 
@@ -123,3 +125,9 @@ progress.
 
 Receiving a Purple Stud while under the effect of a Power Up, or while in a Double Score Zone will not double the
 received studs.
+
+### Cantina Episode door lights
+
+If you are in the main room of the Cantina when you unlock your first level in an episode, the red lights above the
+episode door won't change to green, but the door can still be entered normally. The lights will become green the next
+time you enter the main room of the Cantina.

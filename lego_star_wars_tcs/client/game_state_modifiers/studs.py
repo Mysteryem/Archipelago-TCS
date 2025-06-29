@@ -27,6 +27,14 @@ STUDS_AP_ID_TO_VALUE: Mapping[int, int] = {
 }
 
 
+# todo: grant studs while in a level. This may be more complicated than it may appear because studs can be updated
+#  frequently, and we ideally don't want to cause in-game collected studs to disappear or to undo studs lost when dying
+#  because there is a small amount of time between reading the current studs and writing the updated studs.
+# CURRENT_AREA_STUDS_P1_ADDRESS = 0x855F38
+# CURRENT_AREA_STUDS_P2_ADDRESS = 0x855F48
+# CURRENT_AREA_STUDS_TRUE_JEDI = 0x87B994
+
+
 def give_studs(ctx: TCSContext, ap_item_id: int):
     """
     Grant Studs to the player. Unlike other items, Studs are a consumable resource, so cannot simply be set to the

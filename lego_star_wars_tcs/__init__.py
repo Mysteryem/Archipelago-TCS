@@ -1,7 +1,8 @@
+import logging
 from collections import Counter
 from typing import cast, Iterable, Mapping, Any
 
-from BaseClasses import Region, ItemClassification, CollectionState, Location, Entrance, Tutorial, Item
+from BaseClasses import Region, ItemClassification, CollectionState, Location, Entrance, Tutorial, Item, MultiWorld
 from worlds.AutoWorld import WebWorld, World
 from worlds.LauncherComponents import components, Component, launch_subprocess, Type
 from worlds.generic.Rules import set_rule
@@ -18,6 +19,8 @@ from .items import (
     ITEM_DATA_BY_NAME,
     CHARACTERS_AND_VEHICLES_BY_NAME,
     USEFUL_NON_PROGRESSION_CHARACTERS,
+    MINIKITS_BY_COUNT,
+    MINIKITS_BY_NAME,
 )
 from .levels import (
     BonusArea,
@@ -54,6 +57,9 @@ class LegoStarWarsTCSWebWorld(WebWorld):
     )]
 
 
+logger = logging.getLogger("Lego Star Wars TCS")
+
+
 class LegoStarWarsTCSWorld(World):
     """Lego Star Wars: The Complete Saga"""
 
@@ -73,6 +79,12 @@ class LegoStarWarsTCSWorld(World):
     effective_item_classifications: dict[str, ItemClassification]
     effective_item_collect_extras: dict[str, list[str] | None]
 
+    minikit_bundle_name: str = ""
+    available_chapters: int = 36  # Currently fixed
+    available_minikits: int = -1
+    minikit_bundle_count: int = -1
+    goal_minikit_bundle_count: int = -1
+
     # Item Link worlds do not run generate early, but can create items, so it is necessary to know
     generate_early_run: bool = False
 
@@ -80,6 +92,15 @@ class LegoStarWarsTCSWorld(World):
         super().__init__(multiworld, player)
         self.effective_character_abilities = {}
         self.effective_character_ability_names = {}
+
+    def _log_info(self, message: str, *args, **kwargs):
+        logger.info("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
+
+    def _log_warning(self, message: str, *args, **kwargs):
+        logger.warning("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
+
+    def _log_error(self, message: str, *args, **kwargs):
+        logger.error("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
 
     def generate_early(self) -> None:
         # TODO: Current starting characters are fixed and always have these abilities.
@@ -98,6 +119,26 @@ class LegoStarWarsTCSWorld(World):
                 effective_ability_names = tuple(cast(list[str], [ability.name for ability in effective_abilities]))
                 effective_ability_cache[effective_abilities] = effective_ability_names
                 self.effective_character_ability_names[name] = effective_ability_names
+
+        bundle_size = self.options.minikit_bundle_size.value
+        self.minikit_bundle_name = MINIKITS_BY_COUNT[bundle_size].name
+        self.available_minikits = self.available_chapters * 10  # 10 Minikits per chapter.
+        self.minikit_bundle_count = (self.available_minikits // bundle_size
+                                     + (self.available_minikits % bundle_size != 0))
+
+        # Adjust options.
+        if self.options.minikit_goal_amount.value > self.available_minikits:
+            self._log_warning("The number of minikits required to goal (%i) was higher than the number of available"
+                              " minikits (%i). The number of minikits required to goal has been reduced to the number"
+                              " of available minikits (%i).",
+                              self.options.minikit_goal_amount.value,
+                              self.available_minikits,
+                              self.available_minikits)
+            self.options.minikit_goal_amount.value = self.available_minikits
+
+        # Only whole bundles are counted for logic, so any partial bundles require an extra whole bundle to goal.
+        self.goal_minikit_bundle_count = (self.options.minikit_goal_amount.value // bundle_size
+                                          + (self.options.minikit_goal_amount.value % bundle_size != 0))
 
         self.prepare_items()
         self.generate_early_run = True
@@ -140,8 +181,8 @@ class LegoStarWarsTCSWorld(World):
             if name == "Admiral Ackbar":
                 classification |= ItemClassification.trap
         else:
-            if name == "5 Minikits":
-                # The goal macguffin.
+            if name in MINIKITS_BY_NAME:
+                # A goal macguffin.
                 classification = ItemClassification.progression_skip_balancing
             elif name == "Progressive Score Multiplier":
                 # Generic item that grants Score multiplier Extras, which are all at least Useful.
@@ -187,14 +228,18 @@ class LegoStarWarsTCSWorld(World):
         return LegoStarWarsTCSItem(name, ItemClassification.progression, None, self.player)
 
     def create_items(self) -> None:
-        item_pool = []
-        count_overrides = {
+        item_pool: list[LegoStarWarsTCSItem] = []
+        count_overrides: dict[str, int] = {
             "Purple Stud": 0,
             "Restart Level Trap": 0,
             "Progressive Bonus Level": 6,
             "Progressive Score Multiplier": 5,
-            "5 Minikits": 360 // 5,
+            # Default all Minikit items to `0`,
+            **dict.fromkeys(MINIKITS_BY_NAME.keys(), 0),
+            # then set the count for the Minikit bundle size that is being used.
+            self.minikit_bundle_name: self.minikit_bundle_count,
         }
+
         for item in self.item_name_to_id:
             count = count_overrides.get(item, 1)
             for _ in range(count):
@@ -203,6 +248,8 @@ class LegoStarWarsTCSWorld(World):
         num_to_fill = len(self.multiworld.get_unfilled_locations(self.player))
 
         filler_to_make = num_to_fill - len(item_pool)
+        # More items than locations does not crash, but would be a bug, and should not happen if we can help it.
+        assert filler_to_make >= 0, f"Lego Star Wars TCS: There are not enough locations for all items"
         for _ in range(filler_to_make):
             item_pool.append(self.create_item("Purple Stud"))
 
@@ -427,25 +474,32 @@ class LegoStarWarsTCSWorld(World):
 
         # Victory.
         victory = self.get_location("Minikits Goal")
-        set_rule(victory, lambda state: state.has("5 Minikits", player, 54))
+        set_rule(victory, lambda state: state.has(self.minikit_bundle_name, player, self.goal_minikit_bundle_count))
 
         self.multiworld.completion_condition[self.player] = lambda state: state.has("Slave I", player)
 
     @classmethod
-    def stage_fill_hook(cls, multiworld, progitempool, usefulitempool, filleritempool, fill_locations):
+    def stage_fill_hook(cls,
+                        multiworld: MultiWorld,
+                        progitempool: list[Item],
+                        usefulitempool: list[Item],
+                        filleritempool: list[Item],
+                        fill_locations: list[Location],
+                        ) -> None:
         game_player_ids = set(multiworld.get_game_players(cls.game))
         game_minimal_player_ids = {player for player in game_player_ids
                                    if multiworld.worlds[player].options.accessibility == "minimal"}
-        minikits_item_id = ITEM_NAME_TO_ID["5 Minikits"]
 
         def sort_func(item: Item):
-            if item.player in game_player_ids and item.code == minikits_item_id:
+            if item.player in game_player_ids and item.name in MINIKITS_BY_NAME:
                 if item.player in game_minimal_player_ids:
-                    # TODO?: Only place extra Minikits first, then place all required Minikits last? Get the best of
-                    #  both worlds.
                     # For minimal players, place Minikits first. This helps prevent fill from dumping logically relevant
                     # items into unreachable locations and reducing the number of reachable locations to fewer than the
                     # number of items remaining to be placed.
+                    #
+                    # Placing only the non-required Minikits first or slightly more than the number of non-required
+                    # Minikits first was also tried, but placing all Minikits first seems to give fill the best chance
+                    # of succeeding.
                     return 1
                 else:
                     # For non-minimal players, place Minikits last. The helps prevent fill from filling most/all
@@ -481,6 +535,8 @@ class LegoStarWarsTCSWorld(World):
             **self.options.as_dict(
                 "received_item_messages",
                 "checked_location_messages",
+                "minikit_goal_amount",
+                "minikit_bundle_size",
             )
         }
 

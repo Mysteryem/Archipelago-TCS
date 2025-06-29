@@ -25,7 +25,7 @@ else:
     LegoStarWarsTCSWorld = object
 
 
-ItemType = Literal["Character", "Vehicle", "Extra", "Generic"]
+ItemType = Literal["Character", "Vehicle", "Extra", "Generic", "Minikit"]
 
 
 class LegoStarWarsTCSItem(Item):
@@ -44,6 +44,12 @@ class GenericItemData:
     code: int
     name: str
     item_type: ClassVar[ItemType] = "Generic"
+
+
+@dataclass(frozen=True)
+class MinikitItemData(GenericItemData):
+    bundle_size: int
+    item_type: ClassVar[ItemType] = "Minikit"
 
 
 @dataclass(frozen=True)
@@ -261,7 +267,7 @@ _extra = ExtraData
 
 
 ITEM_DATA: list[GenericItemData] = [
-    _generic(1, "5 Minikits"),
+    MinikitItemData(1, "5 Minikits", 5),
     _char(2, "Jar Jar Binks", 99, abilities=HIGH_JUMP),
     _char(3, "Queen Amidala", 80, abilities=BLASTER),
     _char(4, "Captain Panaka", 98, abilities=BLASTER),
@@ -469,6 +475,9 @@ ITEM_DATA: list[GenericItemData] = [
     _vehicle(196, "TIE Fighter (Darth Vader)", 182, abilities=VEHICLE_TIE),
     _vehicle(197, "TIE Bomber", 209, abilities=VEHICLE_TIE),
     _vehicle(198, "Imperial Shuttle", 198, abilities=VEHICLE_TIE),
+    MinikitItemData(199, "Minikit", 1),
+    MinikitItemData(200, "2 Minikits", 2),
+    MinikitItemData(201, "10 Minikits", 10),
 ]
 
 USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
@@ -490,5 +499,9 @@ EXTRAS_BY_NAME: dict[str, ExtraData] = {data.name: data for data in ITEM_DATA if
 CHARACTERS_AND_VEHICLES_BY_NAME: dict[str, GenericCharacterData] = {data.name: data for data in ITEM_DATA
                                                                     if isinstance(data, GenericCharacterData)}
 GENERIC_BY_NAME: dict[str, GenericItemData] = {data.name: data for data in ITEM_DATA if data.item_type == "Generic"}
+MINIKITS_BY_NAME: dict[str, MinikitItemData] = {data.name: data for data in ITEM_DATA
+                                                if isinstance(data, MinikitItemData)}
 
 ITEM_NAME_TO_ID: dict[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.code != -1}
+
+MINIKITS_BY_COUNT: dict[int, GenericItemData] = {bundle.bundle_size: bundle for bundle in MINIKITS_BY_NAME.values()}

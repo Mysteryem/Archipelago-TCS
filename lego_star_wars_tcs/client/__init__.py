@@ -20,8 +20,9 @@ from pymem.exception import ProcessNotFound, ProcessError, PymemError, WinAPIErr
 from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandProcessor
 
 from .. import options
-from ..constants import GAME_NAME
+from ..constants import GAME_NAME, AP_WORLD_VERSION
 from ..levels import SHORT_NAME_TO_CHAPTER_AREA, CHAPTER_AREAS, ChapterArea
+from ..locations import LOCATION_NAME_TO_ID
 from .common_addresses import ShopType, CantinaRoom
 from .location_checkers.free_play_completion import FreePlayChapterCompletionChecker
 from .location_checkers.bonus_level_completion import BonusAreaCompletionChecker
@@ -31,6 +32,7 @@ from .game_state_modifiers.extras import AcquiredExtras
 from .game_state_modifiers.characters import AcquiredCharacters
 from .game_state_modifiers.generic import AcquiredGeneric
 from .game_state_modifiers.levels import UnlockedChapterManager
+from .game_state_modifiers.minikits import AcquiredMinikits
 from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs
 from .game_state_modifiers.text_display import InGameTextDisplay
 
@@ -269,6 +271,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     auth_status: AuthStatus
     password_requested: bool
 
+    disabled_locations: set[int]  # Server state.
+
     game_process: pymem.Pymem | None = None
     previous_level_id: int = -1
     current_level_id: int = 0  # Title screen
@@ -280,6 +284,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     acquired_characters: AcquiredCharacters
     acquired_extras: AcquiredExtras
     acquired_generic: AcquiredGeneric
+    acquired_minikits: AcquiredMinikits
     unlocked_chapter_manager: UnlockedChapterManager
     text_display: InGameTextDisplay
     client_expected_idx: int
@@ -307,9 +312,12 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.auth_status = AuthStatus.NOT_AUTHENTICATED
         self.password_requested = False
 
+        self.disabled_locations = set()
+
         self.acquired_extras = AcquiredExtras()
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
+        self.acquired_minikits = AcquiredMinikits()
 
         self.text_display = InGameTextDisplay()
 
@@ -365,7 +373,62 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                         message = f"Sent {item_name} to {owner} ({location_name})"
                         self.text_display.queue_message(message)
 
-    def _read_slot_data(self, slot_data: typing.Mapping[str, typing.Any]):
+    @staticmethod
+    def _validate_version(slot_data: typing.Mapping[str, typing.Any]) -> bool:
+        # All versions of the TCS apworld should have written "apworld_version" into slot data, if it is absent then
+        # there is an error.
+        # Ensure the read data from slot_data is a tuple rather than a list so that the comparisons with
+        # AP_WORLD_VERSION work as expected.
+        server_apworld_version = tuple(slot_data["apworld_version"])
+        if AP_WORLD_VERSION != server_apworld_version:
+            # If the major version does not match, the versions are incompatible.
+            # If the minor version of the client is less than the server, then the versions are incompatible.
+            if AP_WORLD_VERSION[0] != server_apworld_version[0] or AP_WORLD_VERSION[1] < server_apworld_version[1]:
+                logger.error("Error: The multiworld was generated with apworld version %s, which is not compatible with"
+                             " the client's apworld version %s. Disconnecting.",
+                             server_apworld_version, AP_WORLD_VERSION)
+                return False
+            else:
+                # If the minor version of the client is equal, then the patch version needs to be compared.
+                if AP_WORLD_VERSION[1] == server_apworld_version[1] and AP_WORLD_VERSION[2] < server_apworld_version[2]:
+                    # The client has an older patch version than the server, this should just mean the client is
+                    # potentially missing some backwards compatible bug fixes, but the bug fixes are likely forwards
+                    # compatible, so the connection will be allowed, but with a warning message.
+                    logger.warning("Warning: Connected to a multiworld generated with a different, but probably"
+                                   " compatible, apworld version %s. The client apworld version is %s. Updating the"
+                                   " client version is recommended to avoid issues. Please update your apworld version"
+                                   " before reporting any issues.",
+                                   server_apworld_version, AP_WORLD_VERSION)
+                else:
+                    # The client has matching major version and newer minor+patch version, everything *should* be OK
+                    # because the client has only additional backwards compatible features and bug fixes.
+                    logger.info("Info: Connected to a multiworld generated with a different, but compatible, apworld"
+                                " version %s. The client apworld version is %s.",
+                                server_apworld_version, AP_WORLD_VERSION)
+        else:
+            logger.info("Info: Connected to multiworld generated on the same version as the client")
+
+        return True
+
+    def _validate_seed_name_against_save_data(self, new_seed_name: str) -> tuple[bool, bytes | None]:
+        save_data_seed_name_hash = self.read_seed_name_hash()
+        server_seed_name_hash = self.hash_seed_name(new_seed_name)
+        debug_logger.info("Seed hash from save file is %s", save_data_seed_name_hash)
+        debug_logger.info("Seed hash from server is %s", server_seed_name_hash)
+        if save_data_seed_name_hash is not None:
+            if server_seed_name_hash != save_data_seed_name_hash:
+                asyncio.create_task(self.disconnect())
+                logger.info("Connection aborted: The server's seed does not match the save file's seed.")
+                self.last_connected_seed_name = None
+                self.last_connected_slot = None
+                return False, None
+            else:
+                return True, None
+        return True, server_seed_name_hash
+
+    def _read_slot_data(self, slot_data: dict):
+        # The connection to the server is assumed to be OK by this point, so slot_data can now be used to adjust client
+        # behaviour.
         received_item_messages = slot_data.get("received_item_messages")
         if isinstance(received_item_messages, int):
             self.received_item_messages = received_item_messages == options.ReceivedItemMessages.option_all
@@ -377,29 +440,32 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         else:
             logger.warning("Warning: 'checked_location_messages' not found in slot data")
 
+        # Guaranteed to be valid after self._validate_version is called.
+        multiworld_version = tuple(slot_data["apworld_version"])
+
+        if multiworld_version < (0, 2, 0):
+            # Older versions do not have the minikit count in slot data, and always required 270/360 minikits to goal.
+            self.acquired_minikits.goal_minikit_count = 270
+        else:
+            self.acquired_minikits.goal_minikit_count = slot_data["minikit_goal_amount"]
+
     def on_package(self, cmd: str, args: dict):
         super().on_package(cmd, args)
+
         if cmd == "RoomInfo":
             new_seed_name = args["seed_name"]
 
-            expected_seed_name_hash = self.read_seed_name_hash()
-            if expected_seed_name_hash is not None:
-                new_seed_name_hash = self.hash_seed_name(new_seed_name)
-                if new_seed_name_hash != expected_seed_name_hash:
-                    asyncio.create_task(self.disconnect())
-                    logger.info("Connection aborted: The server's seed does not match the save file's seed.")
-                    self.last_connected_seed_name = None
-                    self.last_connected_slot = None
+            if self.is_in_game():
+                ok, _server_seed_hash = self._validate_seed_name_against_save_data(new_seed_name)
+                if not ok:
                     return
-            else:
-                self.write_seed_name_hash(new_seed_name)
 
             if self.last_connected_seed_name is not None and self.last_connected_seed_name != new_seed_name:
                 self.on_multiworld_or_slot_changed()
                 # The last connected slot is irrelevant if the multiworld itself has changed.
                 self.last_connected_slot = None
             self.last_connected_seed_name = new_seed_name
-            self.seed_name = args["seed_name"]
+            self.seed_name = new_seed_name
         elif cmd == "Connected":
             if self.last_connected_seed_name is None:
                 # The client should be just about to disconnect from failing to match the server's seed.
@@ -407,18 +473,37 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 asyncio.create_task(self.disconnect())
                 return
 
-            new_slot = self.auth
-
             slot_data = args.get("slot_data")
             if isinstance(slot_data, typing.Mapping):
-                self._read_slot_data(slot_data)
+                if not self._validate_version(slot_data):
+                    # _validate_version should have logged the appropriate message to the user.
+                    self.last_connected_seed_name = None
+                    asyncio.create_task(self.disconnect())
+                    return
             else:
-                logger.warning("Warning: slot_data missing from Connected message")
+                logger.error("Error: slot_data missing from Connected message, something is probably broken.")
+
+            # It is assumed that the player must be loaded into a save file or a new game at this point.
+            ok, server_seed_hash_to_write = self._validate_seed_name_against_save_data(self.last_connected_seed_name)
+            if not ok:
+                self.seed_name = None
+                self.last_connected_seed_name = None
+                return
+
+            if server_seed_hash_to_write is not None:
+                self.write_seed_name_hash(self.last_connected_seed_name)
+
+            new_slot = self.auth
 
             if self.last_connected_slot is not None and self.last_connected_slot != new_slot:
                 self.on_multiworld_or_slot_changed()
             if self.read_slot_name() is None:
                 self.write_slot_name(new_slot)
+            self.disabled_locations = set(LOCATION_NAME_TO_ID.values()) - self.server_locations
+
+            self._read_slot_data(slot_data)
+
+            # Setting this to non-None indicates to the game watcher loop to start fully running.
             self.last_connected_slot = self.auth
             self.auth_status = AuthStatus.AUTHENTICATED
 
@@ -429,6 +514,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     def on_multiworld_or_slot_changed(self):
         # The client is connecting to a different multiworld or slot to before, so reset all persisted client data.
         self.reset_persisted_client_data()
+
+    def is_location_sendable(self, location_id: int):
+        return location_id not in self.checked_locations and location_id not in self.disabled_locations
 
     def run_gui(self):
         from kvui import GameManager
@@ -479,6 +567,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     async def disconnect(self, allow_autoreconnect: bool = False):
         self.auth_status = AuthStatus.NOT_AUTHENTICATED
         self.server_seed_name = None
+        if not allow_autoreconnect:
+            self.reset_persisted_client_data()
+            self.last_connected_slot = None
+            self.last_connected_seed_name = None
         await super().disconnect(allow_autoreconnect)
 
     async def set_auth(self) -> None:
@@ -634,6 +726,11 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         else:
             return hashed
 
+    def is_seed_name_hash_set(self) -> bool:
+        # There is no more efficient way to check this, without forcing the first 4 bytes of seed hashes to not match
+        # the default unused value in the save data, then only the first 4 bytes would need to be checked.
+        return self.read_seed_name_hash() is not None
+
     def write_slot_name(self, name: str) -> None:
         assert len(name) <= 16, "Error: Slot name to write is too long, this should not happen."
         encoded_name = name.encode("utf-8")
@@ -689,6 +786,21 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # Strip any \xFF padding and return the decoded string.
         debug_logger.info(f"Read slot_name bytes as {[hex(x)[2:] for x in encoded_name]}")
         return encoded_name.partition(b"\xFF")[0].decode("utf-8")
+
+    def is_slot_name_set(self) -> bool:
+        """
+        Return whether the current save data has a slot name set.
+
+        More efficient than checking `self.read_slot_name is not None`.
+        """
+        areas = CHAPTER_AREAS[UNUSED_AREA_DWORD_SLOT_NAME_AREAS]
+        # Only the first unused bytes need to be checked.
+        area = areas[0]
+        address = area.address + area.UNUSED_CHALLENGE_BEST_TIME_OFFSET
+        read_bytes = self.read_bytes(address, 4)
+        # The default value is not valid UTF-8, so the default value is not possible to be part of a slot name, so
+        # if the default value is found, then the slot name has not been set and vice versa.
+        return read_bytes != ChapterArea.UNUSED_CHALLENGE_BEST_TIME_VALUE
 
     def read_current_level_id(self) -> int:
         """
@@ -766,6 +878,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         debug_logger.info(f"Receiving item {item_name} from AP")
         if code in self.acquired_generic.receivable_ap_ids:
             self.acquired_generic.receive_generic(self, code)
+        elif code in self.acquired_minikits.receivable_ap_ids:
+            self.acquired_minikits.receive_minikit(code)
         elif code in self.acquired_characters.receivable_ap_ids:
             self.acquired_characters.receive_character(code)
             self.unlocked_chapter_manager.on_character_or_episode_unlocked(code)
@@ -781,6 +895,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.acquired_extras = AcquiredExtras()
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
+        self.acquired_minikits = AcquiredMinikits()
+
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.client_expected_idx = 0
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
@@ -842,7 +958,8 @@ async def give_items(ctx: LegoStarWarsTheCompleteSagaContext):
             ctx.client_expected_idx = idx + 1
 
 
-async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext) -> None:
+async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext,
+                                       only_just_loaded_into_game: bool) -> bool:
     """
     Check for changes to the current save file.
 
@@ -859,13 +976,20 @@ async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext) 
     Save file -> other save file: Reset client state and disconnect if the other save is for a different
                                   multiworld/slot.
     :param ctx:
+    :param only_just_loaded_into_game: Indicates whether the game was previously in the main menu or not connected, but
+    has just loaded into a save file or new game.
     :return:
     """
-    # If the player loads a different save file, re-check the multiworld seed and slot name and reset
-    # persistent client data if either the seed or slot name differ.
-    last_save_file = ctx.last_loaded_save_file
     current_save_file = ctx.get_current_save_file()
-    if last_save_file is not None:
+
+    if ctx.last_connected_slot is None and ctx.last_connected_seed_name is None:
+        # The player has made no connection to a server, so there is nothing to check against.
+        # The player could have started a new game or loaded an existing save file.
+        pass
+    else:
+        # If the player loads a different save file, re-check the multiworld seed and slot name and reset
+        # persistent client data if either the seed or slot name differ.
+        last_save_file = ctx.last_loaded_save_file
         if current_save_file != last_save_file:
             ctx.on_save_file_changed()
 
@@ -875,8 +999,10 @@ async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext) 
             # The player is allowed to exit to the main menu and start a new game.
             if current_save_file is None:
                 if last_slot_name is not None:
+                    logger.info("Copied the last connected slot name to the new save file.")
                     ctx.write_slot_name(last_slot_name)
                 if last_seed_name is not None:
+                    logger.info("Copied the last connected multiworld seed hash to the new save file.")
                     ctx.write_seed_name_hash(last_seed_name)
             else:
                 # The player *could* have another save file with the same seed and slot, which would be
@@ -889,17 +1015,39 @@ async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext) 
                         logger.info("Disconnecting from the server because the newly loaded save file's"
                                     " seed does not match the connected multiworld's seed.")
                     await ctx.disconnect()
+                    return False
                 elif last_slot_name is not None and last_slot_name != ctx.read_slot_name():
                     if ctx.slot:
                         logger.info("Disconnecting from the server because the newly loaded save file's"
                                     " slot name does not match the connected slot.")
                     await ctx.disconnect()
+                    return False
+        elif current_save_file is not None and only_just_loaded_into_game:
+            # The player can start a new game, progress it before connecting to the server (they shouldn't do this
+            # because the client won't be running fully at that point), causing it to save to a save slot. Then the
+            # player could connect to the server (writing the seed hash and slot name into the save data), but then
+            # return to the main menu, reverting the save data to before the seed hash and slot name were written. If
+            # the player then loads the save file again, they can end up connected to the server while not having the
+            # slot name and seed name hash written into their save file.
+            slot_name = ctx.last_connected_slot
+            seed_name = ctx.last_connected_seed_name
+            if slot_name is not None and seed_name is not None:
+                if not ctx.is_slot_name_set():
+                    ctx.write_slot_name(slot_name)
+                    logger.info("Restored slot name in save data after save data was rolled back to before it was set")
+                if not ctx.is_seed_name_hash_set():
+                    ctx.write_seed_name_hash(seed_name)
+                    logger.info("Restored seed name hash in save data after save data was rolled back to before it was"
+                                " set")
     ctx.last_loaded_save_file = current_save_file
+    return True
 
 
 async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
     logger.info("Starting connection to game.")
     last_message = ""
+    # Used to track if the player was loaded into a save/new game in the previous loop.
+    previously_not_in_game = True
 
     def log_message(msg: str, always_log=False):
         nonlocal last_message
@@ -920,6 +1068,7 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
         try:
             game_process = ctx.game_process
             if game_process is None:
+                previously_not_in_game = True
                 if not ctx.open_game_process():
                     log_message("Connection to game failed, attempting again in 5 seconds...", True)
                     sleep_time = 5
@@ -929,21 +1078,53 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     pass
             else:
                 if not ctx.is_in_game():
+                    previously_not_in_game = True
                     # Need to wait for the player to load into a save file.
-                    if ctx.last_loaded_save_file:
-                        msg = "Load back into the game to continue"
+                    if (ctx.last_loaded_save_file is not None
+                            or ctx.last_connected_seed_name is not None
+                            or ctx.last_connected_slot is not None):
+                        # There is a previously loaded save file or connected seed/slot, so the player has exited to the
+                        # main menu.
+                        last_connected_slot_name = ctx.last_connected_slot
+                        if last_connected_slot_name is not None:
+                            log_message(f"Load back into the save file, or a new game (Gold Brick progress will be"
+                                        f" lost), to continue as {last_connected_slot_name}.")
+                        else:
+                            log_message("Load back into a save file or a new game to continue.")
                     else:
-                        msg = "Waiting for the player to load into the game"
-                    log_message(msg)
+                        # There is no previously loaded save file or seed/slot, so the player has just started the game.
+                        log_message("Load into a save file or start a new game to continue.")
                     sleep_time = 1.0
                     continue
 
-                await game_watcher_check_save_file(ctx)
+                # The save file check does some extra checks if the player was previously not loaded into a save
+                # file/new game, but now is.
+                only_just_loaded_into_game = previously_not_in_game
+                previously_not_in_game = False
+
+                if not await game_watcher_check_save_file(ctx, only_just_loaded_into_game):
+                    # The player changed save file to a save file for a different multiworld or slot.
+                    # A message will already have been logged.
+                    sleep_time = 1.0
+                    continue
+
+                if ctx.last_connected_slot is None or ctx.last_connected_seed_name is None:
+                    sleep_time = 1.0
+                    if ctx.server is not None and not ctx.server.socket.closed:
+                        if ctx.auth_status == AuthStatus.NOT_AUTHENTICATED:
+                            await ctx.server_auth(ctx.password_requested)
+                        else:
+                            # Most likely waiting for the player to enter their slot name.
+                            pass
+                    else:
+                        ctx.auth_status = AuthStatus.NOT_AUTHENTICATED
+                        log_message("Connect to a server to continue")
+                    continue
 
                 # Even if the client has disconnected from the server, it is still important to run a number of
                 # coroutines to allow the player to play while disconnected.
                 # todo: Is the `is_in_game()` check here still necessary now that there is an earlier check?
-                if ctx.is_in_game() and ctx.last_connected_slot and ctx.last_connected_seed_name:
+                if ctx.is_in_game():
                     await ctx.free_play_completion_checker.initialize(ctx)
                     await give_items(ctx)
 
@@ -951,8 +1132,25 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     await ctx.acquired_characters.update_game_state(ctx)
                     await ctx.acquired_extras.update_game_state(ctx)
                     await ctx.acquired_generic.update_game_state(ctx)
+                    await ctx.acquired_minikits.update_game_state(ctx)
                     await ctx.unlocked_chapter_manager.update_game_state(ctx)
                     await ctx.text_display.update_game_state(ctx)
+
+                    # Queuing the message for the text display must be after the text_display has updated, so that it
+                    # can initialize itself.
+                    msg = "The client is now fully connected to the game, receiving items and checking locations."
+                    if last_message != msg:
+                        log_message(msg)
+                        slot_name = ctx.read_slot_name()
+                        if ctx.server is None or ctx.server.socket.closed:
+                            # A previous connection must have been made, but the server connection has been lost
+                            # unintentionally (it will attempt to auto-reconnect).
+                            # todo: Make these messages display for longer somehow (extra argument to queue_message?).
+                            ctx.text_display.queue_message(f"Client running in disconnected mode as {slot_name}")
+                            ctx.text_display.queue_message(f"Items and checks will be synced once the server connection"
+                                                           f" is reestablished")
+                        else:
+                            ctx.text_display.queue_message(f"Client running and connected as {slot_name}")
 
                     # Check for newly cleared locations while connected to a slot on a server.
                     # todo: Some of these don't need to be checked very often because they are persisted in the save
@@ -976,13 +1174,14 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
 
                         # Check for goal completion.
                         if not ctx.finished_game:
-                            victory = ctx.acquired_generic.minikit_count >= ctx.acquired_generic.goal_minikit_count
+                            victory = ctx.acquired_minikits.minikit_count >= ctx.acquired_minikits.goal_minikit_count
                             if victory:
                                 await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
                                 ctx.finished_game = True
                 sleep_time = 0.1
         except Exception as e:
             await ctx.unhook_game_process()
+            ctx.reset_persisted_client_data()
             if isinstance(e, (PymemError, WinAPIError)):
                 msg = "Lost connection to game, attempting re-connection in 5 seconds..."
                 debug_logger.error(traceback.format_exc())
@@ -995,6 +1194,8 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
             sleep_time = 5
             continue
 
+        # This is reached when there is no game process to connect to, allowing a server connection to be made, without
+        # actually connecting to a slot.
         if ctx.server is not None and not ctx.server.socket.closed:
             if ctx.auth_status == AuthStatus.NOT_AUTHENTICATED:
                 Utils.async_start(ctx.server_auth(ctx.password_requested))
