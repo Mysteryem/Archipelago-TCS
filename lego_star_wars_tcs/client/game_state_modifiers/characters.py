@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from ..common_addresses import CHARACTERS_SHOP_START, ShopType
 from ..type_aliases import TCSContext, ApItemId
@@ -31,7 +32,7 @@ SHOP_INDEX_TO_CHARACTER_INDEX: dict[int, int] = {
 }
 
 SHOP_INDICES_UNLOCKED_WHEN_ALL_EPISODES_UNLOCKED: set[int] = {
-    CHARACTER_TO_SHOP_INDEX[name] for name, unlock_method in CHARACTER_SHOP_SLOTS.items()
+    CHARACTER_TO_SHOP_INDEX[name] for name, (unlock_method, _studs_cost) in CHARACTER_SHOP_SLOTS.items()
     if unlock_method == "ALL_EPISODES"
 }
 
@@ -53,7 +54,14 @@ class AcquiredCharacters(ItemReceiver):
 
     def __init__(self):
         self.unlocked_characters = set()
-        self.locked_characters = {char.character_index for char in RECEIVABLE_CHARACTERS_BY_AP_ID.values()}
+
+    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+        self.clear_received_items()
+
+    def clear_received_items(self) -> None:
+        # Characters are not progressive, so receiving a character again has no effect, but for consistency, clear them
+        # anyway.
+        self.unlocked_characters.clear()
 
     def unlock_character(self, character: GenericCharacterData):
         self.unlocked_characters.add(character.character_index)
@@ -100,12 +108,6 @@ class AcquiredCharacters(ItemReceiver):
                 chars_array[byte_index] = UNLOCKED
             else:
                 chars_array[byte_index] = LOCKED
-
-        # TC-14 is unlocked by completing Negotiations Story Mode, so we need to manually unlock them as they are
-        # required to complete Negotiations Free Play (assuming C-3PO/IG-88/4-LOM have not been unlocked).
-        # TODO: Once random starting level is implemented, remove this (and make TC-14 an AP item alongside Qui-Gon and
-        #  Obi-Wan).
-        chars_array[CHARACTERS_AND_VEHICLES_BY_NAME["TC-14"].character_index - MIN_RANDOMIZED_BYTE] = UNLOCKED
 
         # If the player is in the Character Shop, temporarily lock the character they have selected for purchase if that
         # Character has already been unlocked through receiving that Character from Archipelago.

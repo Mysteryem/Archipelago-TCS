@@ -46,5 +46,5 @@ class TestItems(TestCase):
             None,  # Available from the start.
             "INDY_TRAILER",  # Watch the Indy Trailer.
         }
-        for area_name in CHARACTER_SHOP_SLOTS.values():
+        for area_name, _studs_cost in CHARACTER_SHOP_SLOTS.values():
             self.assertIn(area_name, possible_unlocks)

@@ -12,7 +12,6 @@ ModuleUpdate.update()
 
 
 import logging
-import struct
 import typing
 from pymem import pymem
 from pymem.exception import ProcessNotFound, ProcessError, PymemError, WinAPIError
@@ -238,7 +237,8 @@ UNUSED_AREA_DWORD_SLOT_NAME_END = UNUSED_AREA_DWORD_SLOT_NAME_START + 16
 UNUSED_AREA_DWORD_SLOT_NAME_AREAS = slice(UNUSED_AREA_DWORD_SLOT_NAME_START,
                                           UNUSED_AREA_DWORD_SLOT_NAME_END)
 
-import random
+COMPLETED_FREE_PLAY_KEY_PREFIX = "tcs_completed_free_play_"
+COMPLETED_FREE_PLAY_KEY_FORMAT = COMPLETED_FREE_PLAY_KEY_PREFIX + "{team}_{slot}"
 
 
 class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
@@ -249,6 +249,7 @@ class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
         """Queue a debug message to be displayed in-game"""
         if isinstance(self.ctx, LegoStarWarsTheCompleteSagaContext):
             if self.ctx.slot:
+                import random
                 self.ctx.text_display.queue_message(random.choice([
                     "The quick brown fox jumps over the lazy dog!",  # English
                     "Voix ambiguë d'un cœur qui, au zéphyr, préfère les jattes de kiwis.",  # French
@@ -331,6 +332,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.client_expected_idx = 0
 
         self.fully_connected = False
+
+    @property
+    def datastorage_free_play_completion_key(self) -> str:
+        return COMPLETED_FREE_PLAY_KEY_FORMAT.format(team=self.team, slot=self.slot)
 
     def on_print_json(self, args: dict) -> None:
         super().on_print_json(args)
@@ -426,28 +431,23 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 return True, None
         return True, server_seed_name_hash
 
-    def _read_slot_data(self, slot_data: dict):
+    def _read_slot_data(self, slot_data: dict[str, typing.Any]):
         # The connection to the server is assumed to be OK by this point, so slot_data can now be used to adjust client
         # behaviour.
-        received_item_messages = slot_data.get("received_item_messages")
-        if isinstance(received_item_messages, int):
-            self.received_item_messages = received_item_messages == options.ReceivedItemMessages.option_all
-        else:
-            logger.warning("Warning: 'received_item_messages' not found in slot data")
-        checked_location_messages = slot_data.get("checked_location_messages")
-        if isinstance(checked_location_messages, int):
-            self.checked_location_messages = checked_location_messages == options.CheckedLocationMessages.option_all
-        else:
-            logger.warning("Warning: 'checked_location_messages' not found in slot data")
+        received_item_messages = slot_data["received_item_messages"]
+        self.received_item_messages = received_item_messages == options.ReceivedItemMessages.option_all
 
-        # Guaranteed to be valid after self._validate_version is called.
-        multiworld_version = tuple(slot_data["apworld_version"])
+        checked_location_messages = slot_data["checked_location_messages"]
+        self.checked_location_messages = checked_location_messages == options.CheckedLocationMessages.option_all
 
-        if multiworld_version < (0, 2, 0):
-            # Older versions do not have the minikit count in slot data, and always required 270/360 minikits to goal.
-            self.acquired_minikits.goal_minikit_count = 270
-        else:
-            self.acquired_minikits.goal_minikit_count = slot_data["minikit_goal_amount"]
+        self.acquired_characters.init_from_slot_data(slot_data)
+        self.acquired_extras.init_from_slot_data(slot_data)
+        self.acquired_generic.init_from_slot_data(slot_data)
+        self.unlocked_chapter_manager.init_from_slot_data(slot_data)
+        self.acquired_minikits.init_from_slot_data(slot_data)
+        self.text_display.init_from_slot_data(slot_data)
+
+        self.free_play_completion_checker.init_from_slot_data(slot_data)
 
     def on_package(self, cmd: str, args: dict):
         super().on_package(cmd, args)
@@ -506,10 +506,37 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             # Setting this to non-None indicates to the game watcher loop to start fully running.
             self.last_connected_slot = self.auth
             self.auth_status = AuthStatus.AUTHENTICATED
+            # Get, and subscribe to, updates to Free Play completions
+            Utils.async_start(self.send_msgs(
+                [
+                    {
+                        "cmd": "Get",
+                        "keys": [self.datastorage_free_play_completion_key]
+                    },
+                    {
+                        "cmd": "SetNotify",
+                        "keys": [self.datastorage_free_play_completion_key]
+                    }
+                ]
+            ))
+        elif cmd == "SetReply":
+            key: str = args["key"]
+            if key.startswith(COMPLETED_FREE_PLAY_KEY_PREFIX) and key == self.datastorage_free_play_completion_key:
+                value = args["value"]
+                if value is not None:
+                    self.free_play_completion_checker.update_from_datastorage(value)
 
-    def on_save_file_changed(self):
-        # The client is loading a different save file to before, so reset all persisted client data.
-        self.reset_persisted_client_data()
+    def update_datastorage_free_play_completion(self, area_ids: list[int]):
+        if not area_ids:
+            return
+        debug_logger.info("Sending Free Play Completion area_ids to datastorage: %s", area_ids)
+        Utils.async_start(self.send_msgs([{
+            "cmd": "Set",
+            "key": self.datastorage_free_play_completion_key,
+            "default": [],
+            "want_reply": False,
+            "operations": [{"operation": "update", "value": area_ids}]
+        }]))
 
     def on_multiworld_or_slot_changed(self):
         # The client is connecting to a different multiworld or slot to before, so reset all persisted client data.
@@ -892,6 +919,11 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             logger.warning(f"Received unknown item with AP ID {code}")
 
     def reset_persisted_client_data(self, clear_text_display_queue=True):
+        """
+        Reset all client state.
+
+        Used when deliberately disconnecting from a server.
+        """
         self.acquired_extras = AcquiredExtras()
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
@@ -899,39 +931,55 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.client_expected_idx = 0
+
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
         self.true_jedi_and_minikit_checker = TrueJediAndMinikitChecker()
         self.purchased_extras_checker = PurchasedExtrasChecker()
         self.purchased_characters_checker = PurchasedCharactersChecker()
         self.bonus_area_completion_checker = BonusAreaCompletionChecker()
+
         if clear_text_display_queue:
             self.text_display.message_queue.clear()
+
+    def reset_client_received_items(self):
+        """
+        Reset the items that the client thinks it has received.
+
+        Use in cases where the client save data has rolled back.
+        """
+        self.acquired_extras.clear_received_items()
+        self.acquired_characters.clear_received_items()
+        self.acquired_generic.clear_received_items()
+        self.acquired_minikits.clear_received_items()
+
+        self.client_expected_idx = 0
 
 
 async def give_items(ctx: LegoStarWarsTheCompleteSagaContext):
     if ctx.is_in_game():
-        # The player can enter a level, receive items, and then exit back to the Cantina without saving, reverting their
-        # expected_idx to an older value and undoing any studs that were given.
+        # The player can enter a save file, receive items, and then exit back to the main menu without saving,
+        # and then load their save file again, reverting their expected_idx to an older value and undoing any studs that
+        # were given.
         # To ensure that given studs take into account the player's score multiplier at the time the studs were given,
-        # it is necessary to reset client state in this case.
+        # it is necessary to reset all received items on the client side in this case.
         expected_idx_game = ctx.get_game_expected_idx()
         expected_idx_client = ctx.client_expected_idx
 
         received_items = ctx.items_received
 
-        # Check if the game rolled back its save data, the client needs to be reset and caught back up.
+        # Check if the game rolled back its save data, the client needs to reset its items and catch back up to the
+        # game.
         if expected_idx_game < ctx.client_expected_idx:
             debug_logger.info("Resetting client received items due to game save data rollback")
-            # The text display queue does not need to be cleared.
-            ctx.reset_persisted_client_data(clear_text_display_queue=False)
+            ctx.reset_client_received_items()
             for idx, item in enumerate(received_items[:expected_idx_game]):
                 ctx.receive_item(item.item)
                 ctx.client_expected_idx = idx + 1
-            expected_idx_client = ctx.client_expected_idx
-
-        # Check if we are resuming a seed where the client is fresh and needs to be caught up.
-        if expected_idx_client < expected_idx_game:
-            # The client may not have yet received the items to be able to catch up yet, so don't spam the debug log.
+            assert ctx.client_expected_idx == min(expected_idx_game, len(received_items))
+        # Check if the player is resuming a seed where the client is fresh and needs to be caught up to the game.
+        elif expected_idx_client < expected_idx_game:
+            # The client may not have yet connected to the server and received the items to be able to catch up yet, so
+            # don't spam the debug log.
             if len(received_items) > expected_idx_client:
                 debug_logger.info("Catching up client to game state. Client expected: %i. Game expected: %i.",
                                   ctx.client_expected_idx, expected_idx_game)
@@ -941,6 +989,7 @@ async def give_items(ctx: LegoStarWarsTheCompleteSagaContext):
                     ctx.client_expected_idx = idx + 1
                 # If `expected_idx_client` is to be used beyond this point, it needs to be updated.
                 # expected_idx_client = ctx.client_expected_idx
+                assert ctx.client_expected_idx == min(expected_idx_game, len(received_items))
 
         # Check if there are new items.
         if len(received_items) <= expected_idx_game:

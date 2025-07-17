@@ -1,5 +1,5 @@
 import logging
-from typing import Mapping, Sequence, AbstractSet
+from typing import Mapping, Sequence, AbstractSet, Any
 
 from ..type_aliases import TCSContext
 from ...items import (
@@ -15,9 +15,9 @@ RECEIVABLE_GENERIC_BY_AP_ID: Mapping[int, GenericItemData] = {
     item.code: item for item in GENERIC_BY_NAME.values() if item.code != -1 and not item.name.endswith("Stud")
 }
 EPISODE_UNLOCKS: Mapping[int, int] = {
-    GENERIC_BY_NAME[f"Episode {i} Unlock"].code: i for i in range(2, 6+1)
+    GENERIC_BY_NAME[f"Episode {i} Unlock"].code: i for i in range(1, 6+1)
 }
-PROGRESSIVE_BONUS_CODE: int = GENERIC_BY_NAME["Progressive Bonus Level"].code
+ALL_EPISODES_TOKEN: int = GENERIC_BY_NAME["All Episodes Token"].code
 PROGRESSIVE_SCORE_MULTIPLIER: int = GENERIC_BY_NAME["Progressive Score Multiplier"].code
 SCORE_MULIPLIER_EXTRAS: Sequence[ExtraData] = (
     EXTRAS_BY_NAME["Score x2"],
@@ -27,10 +27,6 @@ SCORE_MULIPLIER_EXTRAS: Sequence[ExtraData] = (
     EXTRAS_BY_NAME["Score x10"],
 )
 
-# Receiving these items does nothing currently.
-NOOP_ITEMS: tuple[int, ...] = tuple([
-    GENERIC_BY_NAME["Restart Level Trap"].code
-])
 BONUS_CHARACTER_REQUIREMENTS: Mapping[int, AbstractSet[int]] = {
     1: {CHARACTERS_AND_VEHICLES_BY_NAME["Anakin's Pod"].character_index},
     2: {CHARACTERS_AND_VEHICLES_BY_NAME["Naboo Starfighter"].character_index},
@@ -96,15 +92,19 @@ STEP_SCORE_MULTIPLIERS: Sequence[tuple[tuple[int, ...], int]] = [
 class AcquiredGeneric(ItemReceiver):
     receivable_ap_ids = RECEIVABLE_GENERIC_BY_AP_ID
 
-    unlocked_episodes: set[int]
-    progressive_bonus_count: int
-    progressive_score_count: int
+    received_episode_unlocks: set[int]
+    all_episodes_token_counts: int = 0
+    progressive_score_count: int = 0
 
     def __init__(self):
-        # TODO: Allow Episode 1 to be randomized.
-        # TODO: Allow all Episodes to be unlocked from the start.
-        self.unlocked_episodes = {1}
-        self.progressive_bonus_count = 0
+        self.received_episode_unlocks = set()
+
+    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+        self.clear_received_items()
+
+    def clear_received_items(self) -> None:
+        self.received_episode_unlocks.clear()
+        self.all_episodes_token_counts = 0
         self.progressive_score_count = 0
 
     @property
@@ -113,40 +113,21 @@ class AcquiredGeneric(ItemReceiver):
         return COMBINED_SCORE_MULTIPLIERS[idx]
 
     def receive_generic(self, ctx: TCSContext, ap_item_id: int):
-        # Progressive Bonus Unlock
-        if ap_item_id == PROGRESSIVE_BONUS_CODE:
-            # if write_to_game:
-            #     # fixme: Even if a door is built, it won't open unless the player has enough gold bricks.
-            #     built_gold_brick_doors = ctx.read_uchar(BONUSES_BASE_ADDRESS)
-            #     built_gold_brick_doors |= (1 << self.progressive_bonus_count)
-            #     ctx.write_byte(BONUSES_BASE_ADDRESS, built_gold_brick_doors)
-            self.progressive_bonus_count += 1
         # Progressive Score Multiplier
-        elif ap_item_id == PROGRESSIVE_SCORE_MULTIPLIER:
+        if ap_item_id == PROGRESSIVE_SCORE_MULTIPLIER:
             if self.progressive_score_count < len(SCORE_MULIPLIER_EXTRAS):
                 ctx.acquired_extras.unlock_extra(SCORE_MULIPLIER_EXTRAS[self.progressive_score_count])
             self.progressive_score_count += 1
+        # 'All Episodes' tokens
+        elif ap_item_id == ALL_EPISODES_TOKEN:
+            self.all_episodes_token_counts += 1
         # Episode Unlocks
         elif ap_item_id in EPISODE_UNLOCKS:
-            self.unlocked_episodes.add(EPISODE_UNLOCKS[ap_item_id])
+            self.received_episode_unlocks.add(EPISODE_UNLOCKS[ap_item_id])
             ctx.unlocked_chapter_manager.on_character_or_episode_unlocked(ap_item_id)
         else:
             logger.error("Unhandled ap_item_id %s for generic item", ap_item_id)
 
     async def update_game_state(self, ctx: TCSContext):
-        # TODO: Is it even possible to close the bonus door? The individual bonus doors cannot be built until the player
-        #   has enough Gold Bricks, but some of the doors have the same Gold Brick requirements, so making them
-        #   progressive wouldn't work unless we could control that. Forcefully unlocking a bonus level door will not
-        #   work unless the player has the required amount of Gold Bricks.
-        # Bonus levels. There are 6.
-        # The byte controls which of the bonus doors have been built, with 1 bit for each door in order of Gold Brick
-        # cost.
-        # todo: This byte should be an instance attribute that is updated whenever a Progressive Bonus Level is
-        #  received, and whenever a Character requirement for a Bonus level is received.
-        unlocked_bonuses_byte = 0
-        for i in range(1, 7):
-            if i <= self.progressive_bonus_count:
-                character_requirements = BONUS_CHARACTER_REQUIREMENTS.get(i)
-                if not character_requirements or character_requirements <= ctx.acquired_characters.unlocked_characters:
-                    unlocked_bonuses_byte |= (1 << (i - 1))
-        ctx.write_byte(BONUSES_BASE_ADDRESS, unlocked_bonuses_byte)
+        # Bonus level doors unlock as per vanilla, which is having enough Gold Bricks.
+        pass

@@ -15,9 +15,6 @@ ALL_MINIKIT_CHECKS_BY_SHORTNAME: dict[str, list[tuple[int, str]]] = {
 
 # It looks like AREA IDs tend to use 4 bytes, even though they only need 1 byte.
 CURRENT_AREA_ADDRESS = 0x7fd2c1
-# Changes according to what Area door the player is stand in front of. Unlike the previous address, it is 0xFF while
-# in the rest of the Cantina, away from an Area door.
-# CURRENT_AREA_DOOR_ADDRESS = 0x8795A0
 CURRENT_AREA_MINIKIT_COUNT_ADDRESS = 0x951238
 # There is a second address, but I don't know what the difference is. This address remains non-zero for longer when
 # exiting a level.

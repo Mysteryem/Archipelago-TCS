@@ -1,8 +1,8 @@
 from enum import auto, IntFlag
 
-GAME_NAME = "Lego Star Wars The Complete Saga"
+GAME_NAME = "Lego Star Wars: The Complete Saga"
 
-AP_WORLD_VERSION: tuple[int, int, int] = (0, 2, 1)
+AP_WORLD_VERSION: tuple[int, int, int] = (1, 0, 0)
 
 
 # todo: These are the abilities from the manual logic, not the real abilities.
@@ -11,7 +11,7 @@ class CharacterAbility(IntFlag):
     ASTROMECH = auto()
     BLASTER = auto()
     BOUNTY_HUNTER = auto()
-    DROID_OR_FLY = auto()  # Not sure what this is actually meant to be
+    HOVER = auto()
     HIGH_JUMP = auto()
     IMPERIAL = auto()
     JEDI = auto()
@@ -42,7 +42,7 @@ if getattr(CharacterAbility.NONE, "__iter__", None) is None:
 ASTROMECH = CharacterAbility.ASTROMECH
 BLASTER = CharacterAbility.BLASTER
 BOUNTY_HUNTER = CharacterAbility.BOUNTY_HUNTER
-DROID_OR_FLY = CharacterAbility.DROID_OR_FLY
+HOVER = CharacterAbility.HOVER
 HIGH_JUMP = CharacterAbility.HIGH_JUMP
 IMPERIAL = CharacterAbility.IMPERIAL
 JEDI = CharacterAbility.JEDI
@@ -54,6 +54,7 @@ VEHICLE_TOW = CharacterAbility.VEHICLE_TOW
 
 # todo: VEHICLE_TOW can probably be included in the future too.
 # todo: GHOST can probably be included in the future too.
-RARE_AND_USEFUL_ABILITIES = ASTROMECH | BOUNTY_HUNTER | HIGH_JUMP | SHORTIE | SITH | PROTOCOL_DROID
+# todo: PROTOCOL_DROID_PANEL can probably be included in the future too.
+RARE_AND_USEFUL_ABILITIES = ASTROMECH | BOUNTY_HUNTER | HIGH_JUMP | SHORTIE | SITH | PROTOCOL_DROID | HOVER
 
 GOLD_BRICK_EVENT_NAME = "Gold Brick"

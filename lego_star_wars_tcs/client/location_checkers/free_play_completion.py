@@ -1,8 +1,10 @@
 import logging
+from typing import Any
 
-from ...levels import CHAPTER_AREAS, ChapterArea
+from ...levels import CHAPTER_AREAS, ChapterArea, AREA_ID_TO_CHAPTER_AREA
 from ...locations import LOCATION_NAME_TO_ID, LEVEL_COMMON_LOCATIONS
-from ..type_aliases import ApLocationId, LevelId, TCSContext
+from ..type_aliases import ApLocationId, LevelId, TCSContext, AreaId
+from ..common import ClientComponent
 
 
 debug_logger = logging.getLogger("TCS Debug")
@@ -63,7 +65,7 @@ def is_status_level_completion(ctx: TCSContext) -> bool:
 
 # TODO: How quickly can a player reasonably skip through the chapter completion screen? Do we need to check for chapter
 #  completion with a higher frequency than how often the game watcher is checking?
-class FreePlayChapterCompletionChecker:
+class FreePlayChapterCompletionChecker(ClientComponent):
     """
     Check if the player has completed a free play chapter by looking for the ending screen that tallies up new
     studs/minikits.
@@ -74,21 +76,61 @@ class FreePlayChapterCompletionChecker:
     """
 
     sent_locations: set[ApLocationId]
-    completed_free_play: set[ChapterArea]
+    completed_free_play: set[AreaId]
     initial_setup_complete: bool
+    enabled_chapter_areas: set[AreaId] | None
+    chapter_completion_locations: dict[AreaId, list[ApLocationId]]
 
     def __init__(self):
         self.sent_locations = set()
         self.completed_free_play = set()
+        self.enabled_chapter_areas = set()
         self.initial_setup_complete = False
+        self.chapter_completion_locations = {}
+
+    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+        enabled_chapters = set(slot_data["enabled_chapters"])
+        enabled_chapter_areas: set[AreaId] = set()
+        story_character_unlocks = bool(slot_data["enable_story_character_unlock_locations"])
+        for area in CHAPTER_AREAS:
+            if area.short_name in enabled_chapters:
+                enabled_chapter_areas.add(area.area_id)
+                chapter_completion_locations = [STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id]]
+                if story_character_unlocks:
+                    for story_character in area.character_requirements:
+                        loc_name = f"Chapter Completion - Unlock {story_character}"
+                        chapter_completion_locations.append(LOCATION_NAME_TO_ID[loc_name])
+                self.chapter_completion_locations[area.area_id] = chapter_completion_locations
+            else:
+                # There shouldn't be any present, but ensure that no data from disable chapters is present.
+                self.completed_free_play.discard(area.area_id)
+                self.sent_locations.discard(STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id])
+        self.enabled_chapter_areas = enabled_chapter_areas
 
     def read_completed_free_play_from_save_data(self, ctx: TCSContext):
+        enabled_chapter_areas = self.enabled_chapter_areas
+        completed_area_ids: list[int] = []
         for area in CHAPTER_AREAS:
+            area_id = area.area_id
+            if enabled_chapter_areas is not None and area_id not in enabled_chapter_areas:
+                continue
+            # Either the chapter is enabled, or the player has not connected yet, so it is not known if the chapter is
+            # enabled.
             unlocked_byte = ctx.read_uchar(area.address + area.UNLOCKED_OFFSET)
             if unlocked_byte == 0b11:
-                self.completed_free_play.add(area)
+                self.completed_free_play.add(area_id)
                 debug_logger.info("Read from save file that %s has been completed in Free Play", area.short_name)
                 self.sent_locations.add(STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id])
+                completed_area_ids.append(area_id)
+        ctx.update_datastorage_free_play_completion(completed_area_ids)
+
+    def update_from_datastorage(self, area_ids: list[int]):
+        debug_logger.info("Updating Free Play Completion area_ids from datastorage: %s", area_ids)
+        for area_id in area_ids:
+            self.completed_free_play.add(area_id)
+            area = AREA_ID_TO_CHAPTER_AREA[area_id]
+            # The locations should have been sent already, but try sending again just in-case.
+            self.sent_locations.update(self.chapter_completion_locations.get(area_id, ()))
 
     async def initialize(self, ctx: TCSContext):
         if not self.initial_setup_complete:
@@ -102,14 +144,15 @@ class FreePlayChapterCompletionChecker:
         # does 'Save and Exit', changing the Level ID to a 'status' level and accidentally sending a location check.
         current_level_id = ctx.read_current_level_id()
         completion_location_id = STATUS_LEVEL_ID_TO_AP_ID.get(current_level_id)
-        if (completion_location_id is not None
-                and ctx.is_location_sendable(completion_location_id)
-                and is_in_free_play(ctx)
-                and is_status_level_completion(ctx)):
-            self.sent_locations.add(completion_location_id)
+        if completion_location_id is not None:
             area = STATUS_LEVEL_ID_TO_AREA[current_level_id]
-            self.completed_free_play.add(area)
-            ctx.write_byte(area.address + area.UNLOCKED_OFFSET, 0b11)
+            area_id = area.area_id
+            if area_id not in self.completed_free_play and is_in_free_play(ctx) and is_status_level_completion(ctx):
+                completion_locations = self.chapter_completion_locations.get(area.area_id, ())
+                self.sent_locations.update(completion_locations)
+                ctx.update_datastorage_free_play_completion([area_id])
+                self.completed_free_play.add(area.area_id)
+                ctx.write_byte(area.address + area.UNLOCKED_OFFSET, 0b11)
 
         # Not required because only the intersection of ctx.missing_locations will be sent to the server, but removing
         # checked locations (server state) here helps with debugging by reducing self.sent_locations to only new checks.

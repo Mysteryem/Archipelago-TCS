@@ -3,6 +3,10 @@ from enum import IntEnum
 CHARACTERS_SHOP_START = 0x86E4A8  # See CHARACTER_SHOP_SLOTS in items.py for the mapping
 EXTRAS_SHOP_START = 0x86E4B8
 
+# 0 when a menu is not open, 1 when a menu is open (pause screen, shop, custom character creator, select mode after
+# entering a level door). Increases to 2 when opening a submenu in the pause screen.
+OPENED_MENU_DEPTH_ADDRESS = 0x800944
+
 
 class ShopType(IntEnum):
     NONE = 255  # -1 as a `signed char`

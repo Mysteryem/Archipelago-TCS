@@ -1,5 +1,5 @@
 import logging
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, Any
 
 from ..common_addresses import ShopType, EXTRAS_SHOP_START
 from ..type_aliases import TCSContext, ApItemId, BitMask, MemoryOffset
@@ -80,6 +80,15 @@ class AcquiredExtras(ItemReceiver):
     unlocked_extras: bytearray
 
     def __init__(self):
+        self.unlocked_extras = bytearray(NUM_RANDOMIZED_BYTES)
+
+    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+        self.clear_received_items()
+
+    def clear_received_items(self) -> None:
+        # Clearing unlocked extras is necessary because Score Multiplier unlocks are usually progressive. Additionally,
+        # to give the player the correct number of studs when receiving a Purple Stud, the maximum active score
+        # multiplier, at the time of receiving the Stud, must be known.
         self.unlocked_extras = bytearray(NUM_RANDOMIZED_BYTES)
 
     # Here for reference.

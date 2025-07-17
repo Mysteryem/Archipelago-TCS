@@ -1,5 +1,5 @@
 import logging
-from typing import Mapping
+from typing import Mapping, Any
 
 from ..type_aliases import TCSContext
 from ...items import MINIKITS_BY_COUNT
@@ -21,6 +21,14 @@ class AcquiredMinikits(ItemReceiver):
     goal_minikit_count: int = 999_999_999  # Set by an option and read from slot data.
 
     def __init__(self):
+        self.minikit_count = 0
+
+    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+        self.clear_received_items()
+        self.goal_minikit_count = slot_data["minikit_goal_amount"]
+        assert isinstance(self.goal_minikit_count, int)
+
+    def clear_received_items(self) -> None:
         self.minikit_count = 0
 
     def receive_minikit(self, ap_item_id: int):
