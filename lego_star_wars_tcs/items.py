@@ -45,6 +45,10 @@ class GenericItemData:
     name: str
     item_type: ClassVar[ItemType] = "Generic"
 
+    @property
+    def is_sendable(self):
+        return self.code > 0
+
 
 @dataclass(frozen=True)
 class MinikitItemData(GenericItemData):
@@ -323,7 +327,7 @@ ITEM_DATA: list[GenericItemData] = [
     _char(49, "Battle Droid (Security)", 70),
     _char(50, "Battle Droid (Commander)", 68),
     _char(51, "Droideka", 65),
-    _char(52, "Captain Tarpals", 276),
+    _char(52, "Captain Tarpals", 276, abilities=HIGH_JUMP),
     _char(53, "Boss Nass", 254),
     _char(54, "Royal Guard", 101, abilities=BLASTER),
     _char(55, "Watto", 269),
@@ -499,7 +503,7 @@ USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
 
 
 ITEM_DATA_BY_NAME: Mapping[str, GenericItemData] = {data.name: data for data in ITEM_DATA}
-ITEM_DATA_BY_ID: Mapping[int, GenericItemData] = {data.code: data for data in ITEM_DATA if data.code != -1}
+ITEM_DATA_BY_ID: Mapping[int, GenericItemData] = {data.code: data for data in ITEM_DATA if data.is_sendable}
 EXTRAS_BY_NAME: Mapping[str, ExtraData] = {data.name: data for data in ITEM_DATA if isinstance(data, ExtraData)}
 CHARACTERS_AND_VEHICLES_BY_NAME: Mapping[str, GenericCharacterData] = {data.name: data for data in ITEM_DATA
                                                                        if isinstance(data, GenericCharacterData)}
@@ -507,7 +511,6 @@ GENERIC_BY_NAME: Mapping[str, GenericItemData] = {data.name: data for data in IT
 MINIKITS_BY_NAME: Mapping[str, MinikitItemData] = {data.name: data for data in ITEM_DATA
                                                    if isinstance(data, MinikitItemData)}
 
-ITEM_NAME_TO_ID: Mapping[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.code != -1}
+ITEM_NAME_TO_ID: Mapping[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.is_sendable}
 
 MINIKITS_BY_COUNT: Mapping[int, GenericItemData] = {bundle.bundle_size: bundle for bundle in MINIKITS_BY_NAME.values()}
-

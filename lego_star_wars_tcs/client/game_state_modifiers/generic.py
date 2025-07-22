@@ -99,7 +99,7 @@ class AcquiredGeneric(ItemReceiver):
     def __init__(self):
         self.received_episode_unlocks = set()
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         self.clear_received_items()
 
     def clear_received_items(self) -> None:

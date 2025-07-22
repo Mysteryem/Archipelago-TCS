@@ -1,22 +1,21 @@
 # Lego Star Wars: The Complete Saga
 
-This Archipelago randomizer implementation is a work in progress, but is playable.
+This Archipelago randomizer implementation is playable, but is a work in progress. This notice will be removed once the
+logic has been rewritten from scratch, into a format that is more suitable for Archipelago.
 
 ## What does randomization do to this game?
 
 Story mode is skipped for Chapters within an Episode, which should always be played in Free Play.
 
-To unlock a Chapter, all Story Mode characters for that Chapter must be acquired and the corresponding Episode Unlock item
-must be received.
+To unlock a Chapter, all Story Mode characters for that Chapter must be acquired. Optionally, an Episode Unlock item
+must also be acquired.
 
-The player always starts with the characters and Episode Unlock item necessary to enter their starting Chapter.
+The player always starts with the items necessary to enter their starting Chapter.
 
 ## What items and locations get randomized?
 
 ### Items
 Characters, Extras (that require a Power Brick) and Minikits are in the item pool.
-
-Episode Unlock items are added to the item pool.
 
 Score Multiplier Extras are replaced with Progressive Score Multiplier items that unlock more Score Multiplier Extras
 the more Progressive Score Multipliers are acquired.
@@ -28,11 +27,14 @@ Purple Stud items are added to the item pool to fill out the rest of the item po
 Making purchases from the Characters or Extras shop are locations to check.
 The Extras that can be purchased without collecting a Power Brick are not currently location checks.
 
-Completing an Episode Chapter in Free Play is a location to check.
+Completing an Episode Chapter in Free Play is a location to check. Additional checks can be sent for each Story mode
+character that would have been unlocked if the Chapter had been completed in Story mode.
 
 Completing the True Jedi for a Chapter is a location to check.
 
 Every 1-10 number of Minikits collected in a Chapter is a check.
+
+Completing Bonus levels and watching the Indiana Jones trailer can be locations to check.
 
 ## What other changes are made to the game?
 
@@ -93,7 +95,7 @@ added to the starting characters.
 
 When loading a save file for the first time, it is possible for Player 2 to load in as Obi-Wan Kenobi or swap to Qui-Gon
 Jinn, even if those characters should be locked. Upon entering a Chapter in Free Play, Player 2 will continue using that
-character.
+character despite the character being locked.
 
 When entering a Chapter in Free Play with only one Character unlocked for that level type (vehicle/non-vehicle), Player
 2 will pick a locked Character.
@@ -131,3 +133,8 @@ progress.
 
 Receiving a Purple Stud while under the effect of a Power Up, or while in a Double Score Zone will not double the
 received studs.
+
+## Credits
+
+- maybejess: manual apworld reference
+- Roushmore: manual apworld reference

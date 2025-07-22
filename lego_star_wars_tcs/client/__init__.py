@@ -34,6 +34,7 @@ from .game_state_modifiers.levels import UnlockedChapterManager
 from .game_state_modifiers.minikits import AcquiredMinikits
 from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs
 from .game_state_modifiers.text_display import InGameTextDisplay
+from .game_state_modifiers.text_replacer import TextReplacer
 
 
 logger = logging.getLogger("Client")
@@ -237,8 +238,16 @@ UNUSED_AREA_DWORD_SLOT_NAME_END = UNUSED_AREA_DWORD_SLOT_NAME_START + 16
 UNUSED_AREA_DWORD_SLOT_NAME_AREAS = slice(UNUSED_AREA_DWORD_SLOT_NAME_START,
                                           UNUSED_AREA_DWORD_SLOT_NAME_END)
 
+DATA_STORAGE_KEY_SUFFIX = "{team}_{slot}"
+
 COMPLETED_FREE_PLAY_KEY_PREFIX = "tcs_completed_free_play_"
-COMPLETED_FREE_PLAY_KEY_FORMAT = COMPLETED_FREE_PLAY_KEY_PREFIX + "{team}_{slot}"
+COMPLETED_FREE_PLAY_KEY_FORMAT = COMPLETED_FREE_PLAY_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
+
+LEVEL_ID_KEY_PREFIX = "tcs_current_level_id_"
+LEVEL_ID_KEY_FORMAT = LEVEL_ID_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
+
+CANTINA_ROOM_KEY_PREFIX = "tcs_cantina_room_"
+CANTINA_ROOM_KEY_FORMAT = CANTINA_ROOM_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
 
 
 class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
@@ -275,13 +284,16 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     disabled_locations: set[int]  # Server state.
 
     game_process: pymem.Pymem | None = None
-    previous_level_id: int = -1
+    #previous_level_id: int = -1
     current_level_id: int = 0  # Title screen
+    current_cantina_room: CantinaRoom = CantinaRoom.UNKNOWN
     # Memory in the GOG version is offset 32 bytes after GOG_MEMORY_OFFSET_START.
     # todo: Memory in the retail version is offset ?? bytes after ??.
     _gog_memory_offset: int = 0
     # In the case of an unrecognised version, an overall memory offset may be set.
     _overall_memory_offset: int = 0
+
+    # Client state.
     acquired_characters: AcquiredCharacters
     acquired_extras: AcquiredExtras
     acquired_generic: AcquiredGeneric
@@ -296,6 +308,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     purchased_extras_checker: PurchasedExtrasChecker
     purchased_characters_checker: PurchasedCharactersChecker
     bonus_area_completion_checker: BonusAreaCompletionChecker
+
+    # Game-state only.
+    text_replacer: TextReplacer
 
     # Customizable client behaviour
     received_item_messages: bool = True
@@ -321,6 +336,11 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.acquired_minikits = AcquiredMinikits()
 
         self.text_display = InGameTextDisplay()
+
+        # It is not ideal to leak `self` in __init__. The TextReplacer methods could be updated to include a TCSContext
+        # parameter if needed, instead of leaking `self`. Alternatively, the TextReplacer could be created only when
+        # successfully connecting to the game.
+        self.text_replacer = TextReplacer(self)
 
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
@@ -422,7 +442,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         debug_logger.info("Seed hash from server is %s", server_seed_name_hash)
         if save_data_seed_name_hash is not None:
             if server_seed_name_hash != save_data_seed_name_hash:
-                asyncio.create_task(self.disconnect())
+                Utils.async_start(self.disconnect())
                 logger.info("Connection aborted: The server's seed does not match the save file's seed.")
                 self.last_connected_seed_name = None
                 self.last_connected_slot = None
@@ -440,14 +460,14 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         checked_location_messages = slot_data["checked_location_messages"]
         self.checked_location_messages = checked_location_messages == options.CheckedLocationMessages.option_all
 
-        self.acquired_characters.init_from_slot_data(slot_data)
-        self.acquired_extras.init_from_slot_data(slot_data)
-        self.acquired_generic.init_from_slot_data(slot_data)
-        self.unlocked_chapter_manager.init_from_slot_data(slot_data)
-        self.acquired_minikits.init_from_slot_data(slot_data)
-        self.text_display.init_from_slot_data(slot_data)
+        self.acquired_characters.init_from_slot_data(self, slot_data)
+        self.acquired_extras.init_from_slot_data(self, slot_data)
+        self.acquired_generic.init_from_slot_data(self, slot_data)
+        self.unlocked_chapter_manager.init_from_slot_data(self, slot_data)
+        self.acquired_minikits.init_from_slot_data(self, slot_data)
+        self.text_display.init_from_slot_data(self, slot_data)
 
-        self.free_play_completion_checker.init_from_slot_data(slot_data)
+        self.free_play_completion_checker.init_from_slot_data(self, slot_data)
 
     def on_package(self, cmd: str, args: dict):
         super().on_package(cmd, args)
@@ -470,7 +490,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             if self.last_connected_seed_name is None:
                 # The client should be just about to disconnect from failing to match the server's seed.
                 # Disconnect again just in-case.
-                asyncio.create_task(self.disconnect())
+                Utils.async_start(self.disconnect())
                 return
 
             slot_data = args.get("slot_data")
@@ -478,7 +498,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 if not self._validate_version(slot_data):
                     # _validate_version should have logged the appropriate message to the user.
                     self.last_connected_seed_name = None
-                    asyncio.create_task(self.disconnect())
+                    Utils.async_start(self.disconnect())
                     return
             else:
                 logger.error("Error: slot_data missing from Connected message, something is probably broken.")
@@ -650,12 +670,13 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             self._overall_memory_offset = memory_offset
 
         self.game_process = process
+        self.text_replacer = TextReplacer(self)
         return True
 
     async def unhook_game_process(self):
         if self.game_process is not None:
             try:
-                self.text_display.on_unhook_game_process(self)
+                self.text_replacer.on_unhook_game_process()
             except (PymemError, WinAPIError):
                 pass
             finally:
@@ -663,6 +684,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 self.game_process.close_process()
                 self.game_process = None
                 logger.info("Unhooked game process")
+        # Create a new TextReplacer so that if the game is restarted without the client being restarted, then the client
+        # won't try to read/write to memory that was only applicable to the previous game instance.
+        self.text_replacer = TextReplacer(self)
 
     @property
     def _game_process(self) -> pymem.Pymem:
@@ -705,6 +729,12 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
     def write_float(self, address: int, value: float, raw=False) -> None:
         self._game_process.write_float(address if raw else self._adjust_address(address), value)
+
+    def allocate(self, num_bytes: int) -> MemoryAddress:
+        return self._game_process.allocate(num_bytes)
+
+    def free(self, address: MemoryAddress) -> None:
+        self._game_process.free(address)
 
     @staticmethod
     def hash_seed_name(seed_name: str) -> bytes:
@@ -829,6 +859,22 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # if the default value is found, then the slot name has not been set and vice versa.
         return read_bytes != ChapterArea.UNUSED_CHALLENGE_BEST_TIME_VALUE
 
+    def is_connected_to_server(self):
+        return self.server is not None and not self.server.socket.closed
+
+    def update_current_level_id(self, new_level_id: int):
+        current_level_id = self.current_level_id
+        if new_level_id != current_level_id:
+            # Update client state.
+            self.current_level_id = new_level_id
+            # Update the datastorage value in the background.
+            Utils.async_start(self.send_msgs([{
+                "cmd": "Set",
+                "key": LEVEL_ID_KEY_FORMAT.format(slot=self.slot, team=self.team),
+                "want_reply": False,
+                "operations": [{"operation": "replace", "value": new_level_id}]
+            }]))
+
     def read_current_level_id(self) -> int:
         """
         Read the current level ID from memory.
@@ -838,16 +884,34 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         :return: The current level ID.
         """
-        return self.read_ushort(CURRENT_LEVEL_ID)
+        level_id = self.read_ushort(CURRENT_LEVEL_ID)
+        self.update_current_level_id(level_id)
+        return level_id
+
+    def update_current_cantina_room(self, new_cantina_room: CantinaRoom) -> None:
+        current_cantina_room = self.current_cantina_room
+        if new_cantina_room != current_cantina_room:
+            # Update client state.
+            self.current_cantina_room = new_cantina_room
+            # Update the datastorage value in the background.
+            Utils.async_start(self.send_msgs([{
+                "cmd": "Set",
+                "key": CANTINA_ROOM_KEY_FORMAT.format(slot=self.slot, team=self.team),
+                "want_reply": False,
+                "operations": [{"operation": "replace", "value": new_cantina_room.value}]
+            }]))
 
     def read_current_cantina_room(self) -> CantinaRoom:
         if not self.read_current_level_id() == LEVEL_ID_CANTINA:
-            return CantinaRoom.NOT_IN_CANTINA
-        current_room_id = self.read_uchar(CANTINA_ROOM_ID)
-        if 0 <= current_room_id <= 8:
-            return CantinaRoom(current_room_id)
+            room = CantinaRoom.NOT_IN_CANTINA
         else:
-            return CantinaRoom.UNKNOWN
+            current_room_id = self.read_uchar(CANTINA_ROOM_ID)
+            if 0 <= current_room_id <= 8:
+                room = CantinaRoom(current_room_id)
+            else:
+                room = CantinaRoom.UNKNOWN
+        self.update_current_cantina_room(room)
+        return room
 
     def is_in_game(self) -> bool:
         # There are more than 255 levels, but far fewer than 65536, so assume 2 bytes.
@@ -931,6 +995,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.client_expected_idx = 0
+        self.current_level_id = 0
+        self.current_cantina_room = CantinaRoom.UNKNOWN
 
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
         self.true_jedi_and_minikit_checker = TrueJediAndMinikitChecker()
@@ -1172,6 +1238,7 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                 # coroutines to allow the player to play while disconnected.
                 # todo: Is the `is_in_game()` check here still necessary now that there is an earlier check?
                 if ctx.is_in_game():
+                    await ctx.text_replacer.update_game_state(ctx)
                     await ctx.free_play_completion_checker.initialize(ctx)
                     await give_items(ctx)
 
@@ -1183,13 +1250,12 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     await ctx.unlocked_chapter_manager.update_game_state(ctx)
                     await ctx.text_display.update_game_state(ctx)
 
-                    # Queuing the message for the text display must be after the text_display has updated, so that it
-                    # can initialize itself.
+                    # Only queue the message if everything else worked so far.
                     msg = "The client is now fully connected to the game, receiving items and checking locations."
                     if last_message != msg:
                         log_message(msg)
                         slot_name = ctx.read_slot_name()
-                        if ctx.server is None or ctx.server.socket.closed:
+                        if not ctx.is_connected_to_server():
                             # A previous connection must have been made, but the server connection has been lost
                             # unintentionally (it will attempt to auto-reconnect).
                             # todo: Make these messages display for longer somehow (extra argument to queue_message?).

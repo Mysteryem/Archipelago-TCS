@@ -23,7 +23,7 @@ class AcquiredMinikits(ItemReceiver):
     def __init__(self):
         self.minikit_count = 0
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         self.clear_received_items()
         self.goal_minikit_count = slot_data["minikit_goal_amount"]
         assert isinstance(self.goal_minikit_count, int)

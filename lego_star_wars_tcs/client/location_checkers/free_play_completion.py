@@ -88,23 +88,23 @@ class FreePlayChapterCompletionChecker(ClientComponent):
         self.initial_setup_complete = False
         self.chapter_completion_locations = {}
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
-        enabled_chapters = set(slot_data["enabled_chapters"])
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         enabled_chapter_areas: set[AreaId] = set()
-        story_character_unlocks = bool(slot_data["enable_story_character_unlock_locations"])
         for area in CHAPTER_AREAS:
-            if area.short_name in enabled_chapters:
+            chapter_locations = [STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id]]
+            for story_character in area.character_requirements:
+                loc_name = f"Chapter Completion - Unlock {story_character}"
+                chapter_locations.append(LOCATION_NAME_TO_ID[loc_name])
+            enabled_chapter_locations = [loc_id for loc_id in chapter_locations if loc_id in ctx.server_locations]
+            # Determine if a chapter is enabled by whether any of the chapter locations exist.
+            # This is more robust against world bugs than relying on slot data.
+            if enabled_chapter_locations:
                 enabled_chapter_areas.add(area.area_id)
-                chapter_completion_locations = [STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id]]
-                if story_character_unlocks:
-                    for story_character in area.character_requirements:
-                        loc_name = f"Chapter Completion - Unlock {story_character}"
-                        chapter_completion_locations.append(LOCATION_NAME_TO_ID[loc_name])
-                self.chapter_completion_locations[area.area_id] = chapter_completion_locations
+                self.chapter_completion_locations[area.area_id] = enabled_chapter_locations
             else:
                 # There shouldn't be any present, but ensure that no data from disable chapters is present.
                 self.completed_free_play.discard(area.area_id)
-                self.sent_locations.discard(STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id])
+                self.sent_locations.difference_update(chapter_locations)
         self.enabled_chapter_areas = enabled_chapter_areas
 
     def read_completed_free_play_from_save_data(self, ctx: TCSContext):

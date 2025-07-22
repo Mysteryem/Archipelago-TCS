@@ -1,6 +1,4 @@
 import logging
-import re
-import struct
 from collections import deque
 from time import perf_counter_ns
 from typing import Any
@@ -8,17 +6,10 @@ from typing import Any
 from . import GameStateUpdater
 from ..common_addresses import OPENED_MENU_DEPTH_ADDRESS
 from ..type_aliases import TCSContext
+from .text_replacer import TextId
 
 
-logger = logging.getLogger("Client")
 debug_logger = logging.getLogger("TCS Debug")
-
-# char***
-LOCALIZED_TEXT_ARRAY_POINTER = 0x926C20
-DOUBLE_SCORE_ZONE_TEXT_ID = 87
-
-# This is the number of bytes allocated for displaying messages.
-MAX_MESSAGE_LENGTH = 1024
 
 # Float value in seconds. The text will begin to fade out towards the end.
 # Note that values higher than 1.0 will flash more rapidly the higher the value.
@@ -53,53 +44,21 @@ GAME_STATE_ADDRESS = 0x925394
 
 
 class InGameTextDisplay(GameStateUpdater):
-    double_score_zone_string_address: int = -1
-    vanilla_pointer: int
-    vanilla_bytes: bytes = b""
-    initialized: bool = False
     next_allowed_message_time: int = -1
     next_allowed_clean_time: int = -1
     # If the last write to memory was a custom message.
     memory_dirty: bool = False
-    messages_enabled: bool = False
 
     message_queue: deque[str]
 
     def __init__(self):
         self.message_queue = deque()
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         pass
 
-    def _initialize(self, ctx: TCSContext):
-        self.initialized = True
-        process = ctx.game_process
-        assert process is not None
-        # char*** or the char** of the first string in the array.
-        array_address = ctx.read_uint(LOCALIZED_TEXT_ARRAY_POINTER)
-        # char**, the address of the pointer to the "Double Score Zone!" text.
-        double_score_zone_pointer_address = array_address + DOUBLE_SCORE_ZONE_TEXT_ID * 4  # 4 bytes per pointer.
-
-        # char*, the address of the first character in the vanilla "Double Score Zone!" text.
-        self.vanilla_pointer = ctx.read_uint(double_score_zone_pointer_address, raw=True)
-        self.vanilla_bytes = ctx.read_bytes(self.vanilla_pointer, 200, raw=True).partition(b"\x00")[0] + b"\x00"
-
-        self.double_score_zone_string_address = process.allocate(MAX_MESSAGE_LENGTH)
-
-        # Replace the game's pointer to the "Double Score Zone!" text with a pointer to the start of the newly
-        # allocated memory.
-        ctx.write_uint(double_score_zone_pointer_address, self.double_score_zone_string_address, raw=True)
-
-        debug_logger.info("Text Display: Vanilla Double Score Zone! string:")
-        debug_logger.info(self.vanilla_bytes.replace(b"\x00", b"NULL\n").decode("utf-8", errors="replace"))
-        self.messages_enabled = True
-
     def queue_message(self, message: str):
-        if self.messages_enabled:
-            self.message_queue.append(message)
-
-    def write_bytes_to_double_score_zone(self, ctx: TCSContext, string: bytes):
-        ctx.write_bytes(self.double_score_zone_string_address, string, len(string), raw=True)
+        self.message_queue.append(message)
 
     # A custom minimum duration of more than 4 seconds is irrelevant currently because the message fades out by that
     # point.
@@ -108,10 +67,7 @@ class InGameTextDisplay(GameStateUpdater):
                          display_duration_s: float = 4.0):
         # Write the message into the allocated memory for message strings.
         debug_logger.info("Text Display: Displaying in-game message '%s'", message)
-        encoded = message.encode("utf-8", errors="replace")
-        # Limit the maximum size and ensure there is a null terminator.
-        encoded = encoded[:MAX_MESSAGE_LENGTH - 1] + b"\x00"
-        self.write_bytes_to_double_score_zone(ctx, encoded)
+        ctx.text_replacer.write_custom_string(TextId.DOUBLE_SCORE_ZONE, message)
         self.memory_dirty = True
 
         # Set the timer.
@@ -126,12 +82,10 @@ class InGameTextDisplay(GameStateUpdater):
     def on_unhook_game_process(self, ctx: TCSContext) -> None:
         self.message_queue.clear()
         if self.memory_dirty:
-            self.write_bytes_to_double_score_zone(ctx, self.vanilla_bytes)
+            # The TCSContext's TextReplacer will restore all replaced texts back to their vanilla text.
             self.memory_dirty = False
 
     async def update_game_state(self, ctx: TCSContext) -> None:
-        if not self.initialized:
-            self._initialize(ctx)
         now = perf_counter_ns()
         if now < self.next_allowed_message_time:
             return
@@ -139,7 +93,7 @@ class InGameTextDisplay(GameStateUpdater):
         if not self.message_queue:
             if self.memory_dirty and now > self.next_allowed_clean_time:
                 debug_logger.info("Text Display: Clearing dirty memory")
-                self.write_bytes_to_double_score_zone(ctx, self.vanilla_bytes)
+                ctx.text_replacer.write_vanilla_string(TextId.DOUBLE_SCORE_ZONE)
                 self.memory_dirty = False
         else:
             # Don't display a new message if the game is paused, in a cutscene, in a status screen, or tabbed out.
@@ -155,4 +109,3 @@ class InGameTextDisplay(GameStateUpdater):
                     and 1 <= ctx.read_uchar(GAME_STATE_ADDRESS) <= 2
             ):
                 self._display_message(ctx, self.message_queue.popleft())
-

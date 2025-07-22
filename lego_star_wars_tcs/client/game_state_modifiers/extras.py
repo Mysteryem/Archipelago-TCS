@@ -82,7 +82,7 @@ class AcquiredExtras(ItemReceiver):
     def __init__(self):
         self.unlocked_extras = bytearray(NUM_RANDOMIZED_BYTES)
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         self.clear_received_items()
 
     def clear_received_items(self) -> None:

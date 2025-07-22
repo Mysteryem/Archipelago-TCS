@@ -11,6 +11,7 @@ from Options import (
     OptionSet,
     DefaultOnToggle,
     Toggle,
+    OptionGroup,
 )
 
 from .locations import LEVEL_SHORT_NAMES_SET
@@ -18,16 +19,16 @@ from .items import CHARACTERS_AND_VEHICLES_BY_NAME, EXTRAS_BY_NAME
 
 
 CHAPTER_OPTION_KEYS: Mapping[str, AbstractSet[str]] = {
-    **{chapter: {chapter} for chapter in LEVEL_SHORT_NAMES_SET},
     "All": LEVEL_SHORT_NAMES_SET,
     "Prequel Trilogy": {chapter for chapter in LEVEL_SHORT_NAMES_SET if chapter[0] in "123"},
     "Original Trilogy": {chapter for chapter in LEVEL_SHORT_NAMES_SET if chapter[0] in "456"},
     **{f"Episode {s}": {chapter for chapter in LEVEL_SHORT_NAMES_SET if chapter[0] == s} for s in "123456"},
+    **{chapter: {chapter} for chapter in sorted(LEVEL_SHORT_NAMES_SET)},
 }
 
 
 class ChapterOptionSet(OptionSet):
-    valid_keys = set(CHAPTER_OPTION_KEYS.keys())
+    valid_keys = list(CHAPTER_OPTION_KEYS.keys())
 
     @property
     def value_ungrouped(self) -> set[str]:
@@ -45,7 +46,7 @@ class MinikitGoalAmount(NamedRange):
     Setting this option to "use_percentage_option" will use the Minikit Goal Amount Percentage option's value to
     determine how many Minikit's are required to goal.
     """
-    display_name = "Goal Minikits"
+    display_name = "Goal Minikit Count"
     range_start = 10
     range_end = 360
     special_range_names = {
@@ -65,6 +66,7 @@ class MinikitGoalAmountPercentage(Range):
 
     The final number of Minikits required to goal is rounded to the nearest integer, but will always be at least 1.
     """
+    display_name = "Goal Minikit Percentage"
     range_start = 1
     range_end = 100
     default = 75
@@ -94,6 +96,7 @@ class EnabledChaptersCount(Range):
 
     If there are fewer allowed chapters than the count to enable, all the allowed chapters will be enabled.
     """
+    display_name = "Enabled Chapter Count"
     range_start = 1
     range_end = 36
     default = 18
@@ -105,6 +108,7 @@ class AllowedChapterTypes(Choice):
     - All: No additional filtering, all chapters specified in the Allowed Chapters option are allowed.
     - No Vehicles: No vehicle chapters (1-4, 2-1, 2-5, 3-1, 4-6, 5-1, 5-3, 6-6) will be allowed.
     """
+    display_name = "Allowed Chapter Types"
     option_all = 0
     option_no_vehicles = 1
     default = 0
@@ -155,6 +159,7 @@ class AllowedChapters(ChapterOptionSet):
       - 5-3
       - 6-5
     """
+    display_name = "Allowed Chapters"
     default = frozenset({"All"})
 
 
@@ -201,8 +206,9 @@ class PreferredChapters(ChapterOptionSet):
       - 5-3
       - 6-5
     """
+    display_name = "Preferred Chapters"
     # There is no point to using "All" for Preferred Chapters, so remove it from the valid_keys.
-    valid_keys = set(ChapterOptionSet.valid_keys) - {"All"}
+    valid_keys = [key for key in ChapterOptionSet.valid_keys if key != "All"]
     default = frozenset()
 
 
@@ -221,6 +227,7 @@ class PreferEntireEpisodes(Toggle):
 
     When combined with the Preferred Chapters option, this option can be used to guarantee entire episodes.
     """
+    display_name = "Prefer Entire Episodes"
 
 
 class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
@@ -241,6 +248,7 @@ class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
 
     With all Chapters enabled, this adds 56 locations.
     """
+    display_name = "Chapter Completion Character Unlocks"
 
 
 class EnableBonusLocations(Toggle):
@@ -260,6 +268,7 @@ class EnableBonusLocations(Toggle):
 
     With all Chapters enabled, this adds 8 locations.
     """
+    display_name = "Bonuses"
 
 
 class EnableAllEpisodesCharacterPurchaseLocations(Toggle):
@@ -278,7 +287,7 @@ class EnableAllEpisodesCharacterPurchaseLocations(Toggle):
 
     This adds 7 locations.
     """
-    display_name = "Enable 'All Episodes' Character Purchase Locations"
+    display_name = "'All Episodes' Character Purchases"
 
 
 class ChapterUnlockRequirement(Choice):
@@ -290,6 +299,7 @@ class ChapterUnlockRequirement(Choice):
     - Chapter Item: A Chapter unlocks after receiving an unlock item specific to that Chapter, e.g.
     "Chapter 2-3 Unlock".
     """
+    display_name = "Chapter Unlock Requirements"
     option_story_characters = 0
     option_chapter_item = 1
     # option_random_characters = 2
@@ -300,11 +310,14 @@ class ChapterUnlockRequirement(Choice):
 class EpisodeUnlockRequirement(Choice):
     """Choose how Episodes are unlocked.
 
+    Note: An Episode door in the Cantina will only unlock when a Chapter within that Episode has been unlocked.
+
     The Episode of your starting Chapter will always be unlocked from the start.
 
     - Open: All Episodes will be unlocked from the start.
     - Episode Item: Each Episode will unlock after receiving an unlock item for that Episode, e.g. "Episode 5 Unlock".
     """
+    display_name = "Episode Unlock Requirements"
     option_open = 0
     option_episode_item = 1
     default = 0
@@ -323,6 +336,7 @@ class AllEpisodesCharacterPurchaseRequirements(Choice):
     enabled Episodes. All of these "All Episodes Token" items will need to be received to unlock the characters for
     purchase.
     """
+    display_name = "'All Episodes' Character Purchase Unlock Requirements"
     option_episodes_unlocked = 1
     option_episodes_tokens = 2
     default = 2
@@ -335,20 +349,20 @@ class AllEpisodesCharacterPurchaseRequirements(Choice):
 
 
 class StartingChapter(Choice):
-    """Choose the starting chapter. The Episode the starting level belongs to will be accessible from the start.
+    """Choose the starting chapter. The Episode the starting Chapter belongs to will be accessible from the start.
 
     Known issues:
-    - If the starting chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
+    - If the starting Chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
     to the Archipelago server, the starting Episode door will appear locked (red light), but this is only visual.
-    - If the starting chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
+    - If the starting Chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
     to the Archipelago server, the Episode 1 door will be open, but it will correctly lock itself upon re-entering the
     main room of the Cantina.
     - Due to the way the logic currently assumes the player has access to a Jedi and a Protocol Droid, if access to the
-    chosen starting chapter does not include a Jedi and Protocol Droid in its requirements, a Jedi character and/or
+    chosen starting Chapter does not include a Jedi and Protocol Droid in its requirements, a Jedi character and/or
     TC-14 will be added to the starting inventory.
 
-    Due to the character requirements being shared between some levels, some starting levels will result in additional
-    levels being open from the start:
+    Due to the character requirements being shared between some Chapters, some starting Chapters will result in
+    additional Chapters being open from the start:
 
     Starting with 1-1 will also open 1-6.
     Starting with 1-2 will also open 1-6.
@@ -356,7 +370,7 @@ class StartingChapter(Choice):
     Starting with 1-5 will also open 1-6.
     Starting with 3-2 will also open 3-6.
     Starting with 4-3 will also open 4-2."""
-    display_name = "Starting Level"
+    display_name = "Starting Chapter"
     # todo: Try setting the attributes for specific levels such that they use 1-1 format rather than 1_1.
     # Variable names cannot use hyphens, so the options for specific levels are set programmatically.
     # option_1-1 = 11
@@ -422,7 +436,7 @@ class RandomStartingLevelMaxStartingCharacters(Range):
     5 Characters: 4-1
     6 Characters: 1-5, 4-3, 4-4, 4-5, 6-1, 6-4
     7 Characters: 6-2"""
-    display_name = "Random Starting Level Max Starting Characters",
+    display_name = "Random Starting Chapter Max Starting Characters",
     range_start = 2
     range_end = 7
     default = 7
@@ -440,7 +454,8 @@ class PreferredCharacters(OptionSet):
 
     If no vehicle Chapters are enabled, no vehicle characters will be included in the item pool.
     """
-    valid_keys = {char.name for char in CHARACTERS_AND_VEHICLES_BY_NAME.values() if char.code > 0}
+    display_name = "Preferred Characters"
+    valid_keys = {char.name for char in CHARACTERS_AND_VEHICLES_BY_NAME.values() if char.is_sendable}
     default = frozenset({
         # Highest base movement speed or non-Extra-Toggle characters, lots of glitches.
         "Droideka",
@@ -470,10 +485,11 @@ class PreferredExtras(OptionSet):
     included in the item pool will try to ensure there are enough Progressive Score Multiplier items to unlock that
     score multiplier.
     """
+    display_name = "Preferred Extras"
     valid_keys = {
         # Progressive Score Multiplier is an AP-specific item, and this option does not support specifying multiple of
         # an item, so the individual "Score x{number}" Extras are included as valid keys instead.
-        *(extra.name for extra in EXTRAS_BY_NAME.values() if extra.code > 0
+        *(extra.name for extra in EXTRAS_BY_NAME.values() if extra.is_sendable
           and extra.name != "Progressive Score Multiplier"),
         "Score x2",
         "Score x4",
@@ -542,6 +558,7 @@ class FillerWeightCharacters(Range):
     # Many characters are just reskins of another character, and the generator already guarantees that the item pool
     # contains enough characters to reach every location. There are also often many character unlocks for each chapter
     # completed.
+    display_name = "Filler Weight: Characters"
     range_start = 0
     range_end = 100
     default = 40
@@ -561,6 +578,7 @@ class FillerWeightExtras(Range):
     """
     # There is only one Extra reserved in the item pool per chapter and Extras tend to have unique effects, so the
     # default weight is higher.
+    display_name = "Filler Weight: Extras"
     range_start = 0
     range_end = 100
     default = 30
@@ -582,22 +600,13 @@ class FillerWeightJunk(Range):
     Archipelago locations that don't have a corresponding vanilla item, and Minikits being bundled, results in some free
     space in the item pool for any kind of item.
     """
+    display_name = "Filler Weight: Junk"
     range_start = 0
     range_end = 100
     default = 30
 
 
-class FillerMode(Choice):
-    """
-    The generator tries to fill the item pool with as many Characters and Extras as would be unlocked, in vanilla, by
-    all the enabled locations.
-
-    Archipelago locations that don't have a corresponding vanilla item, and Minikits being bundled, results in some free
-    space in the item pool for any kind of item.
-    """
-
-
-class MostExpensivePurchaseWithNoScoreMultiplier(Range):
+class MostExpensivePurchaseWithNoScoreMultiplier(NamedRange):
     """
     The most expensive individual purchase the player can be expected to make without any score multipliers, *in
     thousands of Studs*.
@@ -622,6 +631,24 @@ class MostExpensivePurchaseWithNoScoreMultiplier(Range):
     # 6 * 1000 * 3840 = 23_040_000 -> 6 is the minimum allowed
     range_start = 6
     range_end = 20000
+    special_range_names = {
+        "minimum_(6000_studs)": 6,
+        "10000_studs": 10,
+        "25000_studs": 25,
+        "50000_studs": 50,
+        "75000_studs": 75,
+        "default_(100000_studs)": 100,
+        "250000_studs": 250,
+        "500000_studs": 500,
+        "750000_studs": 750,
+        "1_million_studs": 1000,
+        "vanilla_(1.25_million_studs)": 1250,
+        "2.5_million_studs": 2500,
+        "5_million_studs": 5000,
+        "7.5_million_studs": 7500,
+        "10_million_studs": 10000,
+        "no_score_multipliers_expected": 20000,
+    }
 
 
 class ReceivedItemMessages(Choice):
@@ -746,3 +773,42 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     checked_location_messages: CheckedLocationMessages
     # Future options, not implemented yet.
     # random_starting_level_max_starting_characters: RandomStartingLevelMaxStartingCharacters
+
+
+OPTION_GROUPS: list[OptionGroup] = [
+    OptionGroup("Goal Options", [
+        MinikitGoalAmount,
+        MinikitGoalAmountPercentage,
+    ]),
+    OptionGroup("Chapter Options", [
+        EnabledChaptersCount,
+        AllowedChapters,
+        AllowedChapterTypes,
+        StartingChapter,
+        PreferredChapters,
+        PreferEntireEpisodes,
+    ]),
+    OptionGroup("Location Options", [
+        EnableChapterCompletionCharacterUnlockLocations,
+        EnableBonusLocations,
+        EnableAllEpisodesCharacterPurchaseLocations,
+    ]),
+    OptionGroup("Logic Options", [
+        EpisodeUnlockRequirement,
+        MostExpensivePurchaseWithNoScoreMultiplier,
+        AllEpisodesCharacterPurchaseRequirements,
+    ]),
+    OptionGroup("Item Options", [
+        MinikitBundleSize,
+        StartWithDetectors,
+        PreferredCharacters,
+        PreferredExtras,
+        FillerWeightCharacters,
+        FillerWeightExtras,
+        FillerWeightJunk,
+    ]),
+    OptionGroup("Client Options", [
+        ReceivedItemMessages,
+        CheckedLocationMessages,
+    ])
+]

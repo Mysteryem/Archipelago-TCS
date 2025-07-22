@@ -33,7 +33,7 @@ class UnlockedChapterManager(ClientComponent):
         self.unlocked_chapters_per_episode = {}
         self.enabled_chapter_area_ids = set()
 
-    def init_from_slot_data(self, slot_data: dict[str, Any]) -> None:
+    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
         enabled_chapters = slot_data["enabled_chapters"]
         enabled_episodes = slot_data["enabled_episodes"]
         episode_unlock_requirement = slot_data["episode_unlock_requirement"]

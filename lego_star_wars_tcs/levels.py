@@ -84,8 +84,8 @@ class ChapterArea:
     # TODO: Convert this file mostly into a script that writes `print(repr(GAME_LEVEL_AREAS))`
     short_name: str = field(init=False)
     character_requirements: frozenset[str] = field(init=False)
-    shop_unlocks: dict[str, int] = field(init=False)
-    power_brick_ability_requirements: CharacterAbility = field(init=False)
+    character_shop_unlocks: dict[str, int] = field(init=False)
+    power_brick_ability_requirements: tuple[CharacterAbility, ...] = field(init=False)
     power_brick_location_name: str = field(init=False)
     power_brick_studs_cost: int = field(init=False)
     all_minikits_ability_requirements: CharacterAbility = field(init=False)
@@ -96,16 +96,18 @@ class ChapterArea:
         character_requirements = CHAPTER_AREA_STORY_CHARACTERS[self.short_name]
         object.__setattr__(self, "character_requirements", character_requirements)
 
-        shop_unlocks = {f"Purchase {character}": price for character, price
-                        in SHOP_SLOT_REQUIREMENT_TO_UNLOCKS.get(self.short_name, {}).items()}
-        object.__setattr__(self, "shop_unlocks", shop_unlocks)
+        character_shop_unlocks = {f"Purchase {character}": price for character, price
+                                  in SHOP_SLOT_REQUIREMENT_TO_UNLOCKS.get(self.short_name, {}).items()}
+        object.__setattr__(self, "character_shop_unlocks", character_shop_unlocks)
 
         power_brick = POWER_BRICK_REQUIREMENTS[self.short_name]
         power_brick_location_name = f"Purchase {power_brick.name} ({self.short_name})"
         object.__setattr__(self, "power_brick_location_name", power_brick_location_name)
         power_brick_ability_requirements = power_brick.ability_requirements
         if power_brick_ability_requirements is None:
-            power_brick_ability_requirements = CharacterAbility.NONE
+            power_brick_ability_requirements = (CharacterAbility.NONE,)
+        elif isinstance(power_brick_ability_requirements, CharacterAbility):
+            power_brick_ability_requirements = (power_brick_ability_requirements,)
         object.__setattr__(self, "power_brick_ability_requirements", power_brick_ability_requirements)
         object.__setattr__(self, "power_brick_studs_cost", power_brick.studs_cost)
 
@@ -124,7 +126,9 @@ class BonusArea:
     """
     status_level_id: int
     area_id: int
-    item_requirements: Counter[str]
+    item_requirements: tuple[str, ...] = ()
+    ability_requirements: CharacterAbility = CharacterAbility.NONE
+    gold_bricks_required: int = 0
     gold_brick: bool = True
 
 
@@ -336,7 +340,7 @@ CHAPTER_AREA_STORY_CHARACTERS: dict[str, frozenset[str]] = {
 
 class _PowerBrickData(NamedTuple):
     name: str
-    ability_requirements: CharacterAbility | None
+    ability_requirements: CharacterAbility | tuple[CharacterAbility, ...] | None
     studs_cost: int
 
 
@@ -356,7 +360,7 @@ POWER_BRICK_REQUIREMENTS: dict[str, _PowerBrickData] = {
     "2-6": _PowerBrickData("Force Pull", BOUNTY_HUNTER | SHORTIE, 12_000),
     "3-1": _PowerBrickData("Vehicle Smart Bomb", None, 15_000),
     "3-2": _PowerBrickData("Super Astromech", BOUNTY_HUNTER, 10_000),
-    "3-3": _PowerBrickData("Super Jedi Slam", None, 11_000),
+    "3-3": _PowerBrickData("Super Jedi Slam", (HOVER, HIGH_JUMP), 11_000),
     "3-4": _PowerBrickData("Super Thermal Detonator", BOUNTY_HUNTER | SITH, 25_000),
     "3-5": _PowerBrickData("Deflect Bolts", SITH | HIGH_JUMP, 150_000),
     "3-6": _PowerBrickData("Dark Side", ASTROMECH, 25_000),
@@ -382,7 +386,7 @@ POWER_BRICK_REQUIREMENTS: dict[str, _PowerBrickData] = {
 
 ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "1-1": HIGH_JUMP | ASTROMECH | HOVER | SHORTIE,
-    "1-2": SHORTIE,
+    "1-2": SHORTIE | BLASTER,
     "1-3": SITH | HIGH_JUMP | HOVER | BOUNTY_HUNTER | SHORTIE,
     "1-4": VEHICLE_TIE,
     "1-5": SITH | BOUNTY_HUNTER | HIGH_JUMP,
@@ -395,7 +399,7 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "2-6": HIGH_JUMP | BLASTER | ASTROMECH,
     "3-1": CharacterAbility.NONE,
     "3-2": HIGH_JUMP | BLASTER | SHORTIE,
-    "3-3": HOVER | BOUNTY_HUNTER,
+    "3-3": HOVER | BOUNTY_HUNTER | HIGH_JUMP,
     "3-4": SITH | HIGH_JUMP | HOVER,
     "3-5": SITH | HIGH_JUMP | BLASTER | HOVER | BOUNTY_HUNTER | IMPERIAL,
     "3-6": HOVER,
@@ -489,10 +493,8 @@ CHAPTER_AREAS = [
 # todo: Need to consider the Gold Brick shop eventually. Also Bounty Hunter missions. Also Challenges. Also
 #  Character/Minikit bonuses.
 BONUS_AREAS = [
-    BonusArea("Mos Espa Pod Race (Original)", 0x86E124, 0x1, 35, 4, Counter({
-        # "Anakin's Pod": 1,
-        "Gold Brick": 10,
-    })),
+    # Could require: "Anakin's Pod"
+    BonusArea("Mos Espa Pod Race (Original)", 0x86E124, 0x1, 35, 4, gold_bricks_required=10),
     # There are a number of test levels in LEVELS.TXT that seem to not be counted, so the level IDs for Anakin's Flight
     # do not match what is expected:
     # Intro = 327
@@ -502,38 +504,29 @@ BONUS_AREAS = [
     # Outro1 = 331
     # Outro2 = 332
     # Status = 333
-    BonusArea("Anakin's Flight", 0x86E3AC, 0x1, 333, 58, Counter({
-        # "Naboo Starfighter": 1,
-        "Gold Brick": 30,
-    })),
-    BonusArea("Gunship Cavalry (Original)", 0x86E1A8, 0x1, 98, 15, Counter({
-        # "Republic Gunship": 1,
-        "Gold Brick": 10,
-    })),
+    # Could require: "Naboo Starfighter"
+    BonusArea("Anakin's Flight", 0x86E3AC, 0x1, 333, 58, gold_bricks_required=30),
+    # Could require: "Republic Gunship"
+    BonusArea("Gunship Cavalry (Original)", 0x86E1A8, 0x1, 98, 15, gold_bricks_required=10),
     # Note: The base address may be incorrect/I do not know what the base address is supposed to be.
-    BonusArea("A New Hope (Bonus Level)", 0x86E249, 0x8, 150, 29, Counter({
-        # "Darth Vader": 1,
-        # "Stormtrooper": 1,
-        # "C-3PO": 1,
-        "Gold Brick": 20,
-    })),
-    BonusArea("LEGO City", 0x86E3B8, 0x1, 311, 59, Counter({
-        "Gold Brick": 10,
-    })),
-    BonusArea("New Town", 0x86E3A0, 0x1, 309, 57, Counter({
-        "Gold Brick": 50,
-    })),
+    # Could require: "Darth Vader" + "Stormtrooper" + "C-3PO"
+    BonusArea("A New Hope (Bonus Level)", 0x86E249, 0x8, 150, 29, gold_bricks_required=20),
+    BonusArea("LEGO City", 0x86E3B8, 0x1, 311, 59,
+              gold_bricks_required=10, ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
+    BonusArea("New Town", 0x86E3A0, 0x1, 309, 57,
+              gold_bricks_required=50, ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
     # The bonus level was never completed, so there is just the trailer to watch (which can be skipped immediately).
     # No gold brick for watching the trailer, but it does unlock the shop slot for purchasing Indiana Jones in vanilla
     # todo: Add the Purchase Indiana Jones location.
     # It looks like the unfinished Indiana Jones level would have been Area 67, though this is inaccessible.
-    BonusArea("Indiana Jones: Trailer", 0x86E4E5, 0x0, -1, 67, Counter(), gold_brick=False)
+    BonusArea("Indiana Jones: Trailer", 0x86E4E5, 0x0, -1, 67, gold_brick=False)
 ]
+BONUS_NAME_TO_BONUS_AREA = {bonus.name: bonus for bonus in BONUS_AREAS}
 
 # todo: Rewrite this to be cleaner, probably by splitting the BonusGameLevelArea requirements into characters and other
 #  items.
 BONUS_AREA_REQUIREMENT_CHARACTERS = [
-    [item for item in area.item_requirements.keys() if item not in ("Progressive Bonus Level", "Gold Brick")]
+    [item for item in area.item_requirements if item not in ("Progressive Bonus Level", "Gold Brick")]
     for area in BONUS_AREAS
 ]
 

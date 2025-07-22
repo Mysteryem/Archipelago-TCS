@@ -11,9 +11,9 @@ class TestLevels(TestCase):
             for requirement in area.character_requirements:
                 self.assertIn(requirement, ITEM_DATA_BY_NAME)
 
-    def test_shop_unlocks(self):
+    def test_character_shop_unlocks(self):
         for area in CHAPTER_AREAS:
-            for shop_unlock_location, _cost in area.shop_unlocks.items():
+            for shop_unlock_location, _cost in area.character_shop_unlocks.items():
                 self.assertIn(shop_unlock_location, LOCATION_NAME_TO_ID)
 
     def test_power_bricks(self):

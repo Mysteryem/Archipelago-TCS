@@ -47,6 +47,7 @@ from .levels import (
     SHORT_NAME_TO_CHAPTER_AREA,
     POWER_BRICK_REQUIREMENTS,
     ALL_MINIKITS_REQUIREMENTS,
+    BONUS_NAME_TO_BONUS_AREA,
 )
 from .locations import LOCATION_NAME_TO_ID, LegoStarWarsTCSLocation, LEVEL_SHORT_NAMES_SET
 from .options import (
@@ -54,7 +55,10 @@ from .options import (
     StartingChapter,
     AllEpisodesCharacterPurchaseRequirements,
     MinikitGoalAmount,
+    OPTION_GROUPS,
 )
+from .item_groups import ITEM_GROUPS
+from .location_groups import LOCATION_GROUPS
 
 
 def launch_client():
@@ -69,6 +73,7 @@ components.append(Component("Lego Star Wars: The Complete Saga Client",
 
 class LegoStarWarsTCSWebWorld(WebWorld):
     theme = "partyTime"
+    option_groups = OPTION_GROUPS
     tutorials = [Tutorial(
         "Multiworld Setup Guide",
         "A guide for setting up Lego Star Wars: The Complete Saga to be played in Archipelago.",
@@ -92,6 +97,8 @@ class LegoStarWarsTCSWorld(World):
 
     item_name_to_id = ITEM_NAME_TO_ID
     location_name_to_id = LOCATION_NAME_TO_ID
+    item_name_groups = ITEM_GROUPS
+    location_name_groups = LOCATION_GROUPS
 
     origin_region_name = "Cantina"
 
@@ -132,20 +139,20 @@ class LegoStarWarsTCSWorld(World):
         self.enabled_bonuses = set()
         self.character_chapter_access_counts = Counter()
 
-    def _log_info(self, message: str, *args, **kwargs) -> None:
-        logger.info("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
+    def _log_info(self, message: str, *args) -> None:
+        logger.info("Lego Star Wars TCS (%s): " + message, self.player_name, *args)
 
-    def _log_warning(self, message: str, *args, **kwargs) -> None:
-        logger.warning("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
+    def _log_warning(self, message: str, *args) -> None:
+        logger.warning("Lego Star Wars TCS (%s): " + message, self.player_name, *args)
 
-    def _log_error(self, message: str, *args, **kwargs) -> None:
-        logger.error("Lego Star Wars TCS (%s): " + message, self.player_name, *args, **kwargs)
+    def _log_error(self, message: str, *args) -> None:
+        logger.error("Lego Star Wars TCS (%s): " + message, self.player_name, *args)
 
-    def _raise_error(self, ex_type: Callable[[str], Exception], message: str, *args, **kwargs) -> NoReturn:
-        raise ex_type(("Lego Star Wars TCS (%s): " + message).format(*args, **kwargs))
+    def _raise_error(self, ex_type: Callable[[str], Exception], message: str, *args) -> NoReturn:
+        raise ex_type(("Lego Star Wars TCS (%s): " + message) % (self.player_name, *args))
 
-    def _option_error(self, message: str, *args, **kwargs) -> NoReturn:
-        self._raise_error(OptionError, message, *args, **kwargs)
+    def _option_error(self, message: str, *args) -> NoReturn:
+        self._raise_error(OptionError, message, *args)
 
     def generate_early(self) -> None:
         # Universal Tracker support.
@@ -207,6 +214,9 @@ class LegoStarWarsTCSWorld(World):
             elif starting_chapter_option == StartingChapter.option_random_non_vehicle:
                 starting_chapters = set(LEVEL_SHORT_NAMES_SET).difference(VEHICLE_CHAPTER_SHORTNAMES)
             elif starting_chapter_option == StartingChapter.option_random_vehicle:
+                if self.options.allowed_chapter_types == "no_vehicles":
+                    self._option_error("'random_vehicle' starting Chapter cannot be used when Allowed Chapter Types is"
+                                       " set to 'no_vehicles'.")
                 starting_chapters = set(VEHICLE_CHAPTER_SHORTNAMES)
             elif match := re.fullmatch(r"random_episode_([1-6])", starting_chapter_option.current_key):
                 episode = int(match.group(1))
@@ -455,7 +465,8 @@ class LegoStarWarsTCSWorld(World):
         #  unlock characters of the each type.
         vehicle_chapters_enabled = not VEHICLE_CHAPTER_SHORTNAMES.isdisjoint(self.enabled_chapters)
         possible_pool_character_items = {name: char for name, char in CHARACTERS_AND_VEHICLES_BY_NAME.items()
-                                         if char.code > 0 and (vehicle_chapters_enabled or char.item_type != "Vehicle")}
+                                         if char.is_sendable and (vehicle_chapters_enabled
+                                                                  or char.item_type != "Vehicle")}
         # If Gunship Cavalry (Original), Pod Race (Original) and Anakin's Flight get updated to require Vehicles again,
         # then Republic Gunship, Anakin's Pod and Naboo Starfighter would be required items to included in the pool.
         # if not vehicle_chapters_enabled:
@@ -546,8 +557,15 @@ class LegoStarWarsTCSWorld(World):
         for shortname in self.enabled_chapters:
             power_brick_abilities = POWER_BRICK_REQUIREMENTS[shortname][1]
             if power_brick_abilities is not None:
-                required_character_abilities_in_pool |= power_brick_abilities
+                if isinstance(power_brick_abilities, tuple):
+                    # Pick any one of the required abilities at random.
+                    required_character_abilities_in_pool |= self.random.choice(power_brick_abilities)
+                else:
+                    required_character_abilities_in_pool |= power_brick_abilities
             required_character_abilities_in_pool |= ALL_MINIKITS_REQUIREMENTS[shortname]
+        for bonus_name in self.enabled_bonuses:
+            area = BONUS_NAME_TO_BONUS_AREA[bonus_name]
+            required_character_abilities_in_pool |= area.ability_requirements
         # Remove counts <= 0.
         level_access_character_counts = +self.character_chapter_access_counts
         for name in level_access_character_counts.keys():
@@ -583,11 +601,11 @@ class LegoStarWarsTCSWorld(World):
             detectors = {"Minikit Detector", "Power Brick Detector"}
             assert detectors <= set(EXTRAS_BY_NAME.keys())
             non_required_extras = [name for name, extra in EXTRAS_BY_NAME.items()
-                                   if extra.code > 0 and name not in detectors]
+                                   if extra.is_sendable and name not in detectors]
             for detector in sorted(detectors):
                 self.push_precollected(self.create_item(detector))
         else:
-            non_required_extras = [name for name, extra in EXTRAS_BY_NAME.items() if extra.code > 0]
+            non_required_extras = [name for name, extra in EXTRAS_BY_NAME.items() if extra.is_sendable]
 
         required_score_multipliers = self.required_score_multiplier_count
         non_required_score_multipliers = 5 - required_score_multipliers
@@ -980,14 +998,14 @@ class LegoStarWarsTCSWorld(World):
 
                 # Character Purchases in the shop.
                 # Character purchases unlocked upon completing the chapter (normally in Story mode).
-                for shop_unlock, studs_cost in chapter.shop_unlocks.items():
+                for shop_unlock, studs_cost in chapter.character_shop_unlocks.items():
                     shop_location = LegoStarWarsTCSLocation(self.player, shop_unlock,
                                                             self.location_name_to_id[shop_unlock], chapter_region)
                     chapter_region.locations.append(shop_location)
                     self.required_score_multiplier_count = max(
                         self.required_score_multiplier_count,
                         self._get_score_multiplier_requirement(studs_cost))
-                self.character_unlock_location_count += len(chapter.shop_unlocks)
+                self.character_unlock_location_count += len(chapter.character_shop_unlocks)
 
                 # Minikits.
                 chapter_minikits = self.create_region(f"{chapter.name} Minikits")
@@ -1006,9 +1024,10 @@ class LegoStarWarsTCSWorld(World):
                     self.gold_brick_event_count += 1
                     chapter_minikits.locations.append(all_minikits_gold_brick)
 
-                # Story Character unlocks.
-                for character in sorted(CHAPTER_AREA_STORY_CHARACTERS[chapter.short_name]):
-                    story_character_unlock_regions.setdefault(character, []).append(chapter_region)
+                if self.options.enable_story_character_unlock_locations:
+                    # Story Character unlocks.
+                    for character in sorted(CHAPTER_AREA_STORY_CHARACTERS[chapter.short_name]):
+                        story_character_unlock_regions.setdefault(character, []).append(chapter_region)
 
         for character, parent_regions in story_character_unlock_regions.items():
             character_region = self.create_region(f"Unlock {character}")
@@ -1036,7 +1055,7 @@ class LegoStarWarsTCSWorld(World):
             cantina.connect(bonuses, "Bonuses Door")
             gold_brick_costs: dict[int, list[BonusArea]] = {}
             for area in BONUS_AREAS:
-                gold_brick_costs.setdefault(area.item_requirements["Gold Brick"], []).append(area)
+                gold_brick_costs.setdefault(area.gold_bricks_required, []).append(area)
 
             previous_gold_brick_region = bonuses
             for gold_brick_cost, areas in sorted(gold_brick_costs.items(), key=lambda t: t[0]):
@@ -1059,6 +1078,8 @@ class LegoStarWarsTCSWorld(World):
                         self.player, area.name, self.location_name_to_id[area.name], region)
                     region.locations.append(location)
                     self.enabled_bonuses.add(area.name)
+                    # todo: Item requirements have been removed for now because it is not currently possible to lock
+                    #  access to the bonus levels.
                     for item in area.item_requirements:
                         if item in CHARACTERS_AND_VEHICLES_BY_NAME:
                             self.character_chapter_access_counts[item] += 1
@@ -1112,14 +1133,42 @@ class LegoStarWarsTCSWorld(World):
         # visualize_regions(cantina, "LegoStarWarsTheCompleteSaga_Regions.puml", show_entrance_names=True)
 
     def set_abilities_rule(self, spot: Location | Entrance, abilities: CharacterAbility):
-        if abilities:
-            player = self.player
-            ability_names = cast(list[str], [ability.name for ability in abilities])
-            if len(ability_names) == 1:
-                ability_name = ability_names[0]
-                set_rule(spot, lambda state: state.has(ability_name, player))
+        player = self.player
+        ability_names = cast(list[str], [ability.name for ability in abilities])
+        if len(ability_names) == 0:
+            set_rule(spot, Location.access_rule if isinstance(spot, Location) else Entrance.access_rule)
+        elif len(ability_names) == 1:
+            ability_name = ability_names[0]
+            set_rule(spot, lambda state: state.has(ability_name, player))
+        else:
+            set_rule(spot, lambda state: state.has_all(ability_names, player))
+
+    def set_any_abilities_rule(self, spot: Location | Entrance, *any_abilities: CharacterAbility):
+        for any_ability in any_abilities:
+            if not any_ability:
+                # No requirements overrides any other ability requirements
+                self.set_abilities_rule(spot, any_ability)
+                return
+        if not any_abilities:
+            self.set_abilities_rule(spot, CharacterAbility.NONE)
+            return
+        any_abilities_set = set(any_abilities)
+        if len(any_abilities_set) == 1:
+            self.set_abilities_rule(spot, next(iter(any_abilities_set)))
+        else:
+            sorted_abilities = sorted(any_abilities_set, key=lambda a: (a.bit_count(), a.value))
+            ability_names = [cast(list[str], [a.name for a in any_ability]) for any_ability in sorted_abilities]
+            if all(len(names) == 1 for names in ability_names):
+                # Optimize for all abilities being only a single flag each.
+                singular_names = {names[0] for names in ability_names}
+                set_rule(spot, lambda state, items_=tuple(singular_names), p=self.player: state.has_all(items_, p))
             else:
-                set_rule(spot, lambda state: state.has_all(ability_names, player))
+                def rule(state: CollectionState):
+                    for names in ability_names:
+                        if state.has_all(names, self.player):
+                            return True
+                    return False
+                set_rule(spot, rule)
 
     def _get_score_multiplier_requirement(self, studs_cost: int):
         max_no_multiplier_cost = self.options.most_expensive_purchase_with_no_multiplier.value * 1000
@@ -1185,13 +1234,13 @@ class LegoStarWarsTCSWorld(World):
                     generic_character = CHARACTERS_AND_VEHICLES_BY_NAME[character_name]
                     entrance_abilities |= generic_character.abilities
 
-                def set_chapter_spot_abilities_rule(spot: Location | Entrance, abilities: CharacterAbility):
+                def set_chapter_spot_abilities_rule(spot: Location | Entrance, *abilities: CharacterAbility):
                     # Remove any requirements already satisfied by the chapter entrance before setting the rule.
-                    self.set_abilities_rule(spot, abilities & ~entrance_abilities)
+                    self.set_any_abilities_rule(spot, *[ability & ~entrance_abilities for ability in abilities])
 
                 # Set Power Brick logic
                 power_brick = self.get_location(chapter.power_brick_location_name)
-                set_chapter_spot_abilities_rule(power_brick, chapter.power_brick_ability_requirements)
+                set_chapter_spot_abilities_rule(power_brick, *chapter.power_brick_ability_requirements)
                 self._add_score_multiplier_rule(power_brick, chapter.power_brick_studs_cost)
 
                 # Set Minikits logic
@@ -1199,7 +1248,7 @@ class LegoStarWarsTCSWorld(World):
                 set_chapter_spot_abilities_rule(all_minikits_entrance, chapter.all_minikits_ability_requirements)
 
                 # Set Character Purchase logic
-                for shop_unlock, studs_cost in chapter.shop_unlocks.items():
+                for shop_unlock, studs_cost in chapter.character_shop_unlocks.items():
                     purchase_location = self.get_location(shop_unlock)
                     self._add_score_multiplier_rule(purchase_location, studs_cost)
 
@@ -1208,17 +1257,16 @@ class LegoStarWarsTCSWorld(World):
         for area in BONUS_AREAS:
             if area.name not in self.enabled_bonuses:
                 continue
-            requirements = area.item_requirements
-            gold_brick_requirements.add(requirements[GOLD_BRICK_EVENT_NAME])
-            # Gold Brick requirements are set on the entrances.
-            requirements[GOLD_BRICK_EVENT_NAME] = 0
-            if requirements.total():
-                completion = self.get_location(area.name)
-                item_counts: Mapping[str, int] = dict(+requirements)
-                set_rule(completion, lambda state, items_=item_counts: state.has_all_counts(items_, player))
-                if area.gold_brick:
-                    gold_brick = self.get_location(f"{area.name} - Gold Brick")
-                    set_rule(gold_brick, completion.access_rule)
+            # Gold brick requirements are set on entrances, so do not need to be set on the locations themselves.
+            gold_brick_requirements.add(area.gold_bricks_required)
+            completion = self.get_location(area.name)
+            if area.ability_requirements:
+                self.set_abilities_rule(completion, area.ability_requirements)
+            if area.item_requirements:
+                add_rule(completion, lambda state, items_=area.item_requirements: state.has_all(items_, player))
+            if area.gold_brick:
+                gold_brick = self.get_location(f"{area.name} - Gold Brick")
+                set_rule(gold_brick, completion.access_rule)
         # Locations with 0 Gold Bricks required are added to the base Bonuses region.
         gold_brick_requirements.discard(0)
 
