@@ -122,6 +122,7 @@ class LegoStarWarsTCSWorld(World):
     enabled_episodes: set[int]
     enabled_bonuses: set[str]
     enabled_bosses: set[str]
+    short_name_to_boss_character: dict[str, str]
 
     starting_chapter: str = "1-1"
     starting_episode: int = 1
@@ -142,6 +143,7 @@ class LegoStarWarsTCSWorld(World):
         self.enabled_episodes = set()
         self.enabled_bonuses = set()
         self.character_chapter_access_counts = Counter()
+        self.short_name_to_boss_character = {}
 
     def _log_info(self, message: str, *args) -> None:
         logger.info("Lego Star Wars TCS (%s): " + message, self.player_name, *args)
@@ -439,6 +441,25 @@ class LegoStarWarsTCSWorld(World):
             # Act as if there was no filtering of allowed chapter types.
             self.options.allowed_chapter_types.set_from_string("all")
 
+            # Compute boss names when unique bosses are enabled.
+            unique_bosses_only = (
+                    self.options.only_unique_bosses_count != OnlyUniqueBossesCountTowardsGoal.option_disabled)
+            unique_bosses_anakin_as_darth_vader = (
+                    self.options.only_unique_bosses_count
+                    == OnlyUniqueBossesCountTowardsGoal.option_enabled_and_count_anakin_as_vader
+            )
+            if unique_bosses_only:
+                short_name_to_boss_character: dict[str, str] = {}
+                for chapter in self.enabled_bosses:
+                    boss_character = SHORT_NAME_TO_CHAPTER_AREA[chapter].boss
+                    if unique_bosses_anakin_as_darth_vader and boss_character == "Anakin Skywalker":
+                        boss_character = "Darth Vader"
+                    assert boss_character is not None
+                    short_name_to_boss_character[chapter] = boss_character
+            else:
+                short_name_to_boss_character = {}
+            self.short_name_to_boss_character = short_name_to_boss_character
+
         # Normal options parsing.
         else:
             options = self.options
@@ -567,6 +588,7 @@ class LegoStarWarsTCSWorld(World):
             else:
                 maximum_unique_boss_characters = -1
                 short_name_to_boss_character = {}
+            self.short_name_to_boss_character = short_name_to_boss_character
 
             # If the starting chapter cannot be a boss chapter, then the maximum possible number of bosses is 1 fewer.
             starting_chapter_cannot_be_a_boss = allowed_starting_chapters.isdisjoint(allowed_boss_chapters)
@@ -982,7 +1004,16 @@ class LegoStarWarsTCSWorld(World):
         effective_item_classifications, effective_item_collect_extras = (
             self._get_effective_item_data(starting_abilities)
         )
-        self.starting_character_abilities = starting_abilities
+        if hasattr(self.multiworld, "generation_is_fake"):
+            # Universal Tracker appears to delete the items added to precollected_items by create_items, instead later
+            # creating all items with create_item(), but starting characters need to be created before
+            # self.starting_character_abilities is set to `starting_abilities` otherwise the starting characters will
+            # lose all their abilities. To work around this, Universal Tracker is made to pretend that the starting
+            # characters had no abilities, so no abilities will be stripped from any characters created later on with
+            # create_item().
+            self.starting_character_abilities = CharacterAbility.NONE
+        else:
+            self.starting_character_abilities = starting_abilities
 
         # Determine what abilities must be supplied by the item pool for all locations to be reachable with all items in
         # the item pool.
@@ -1527,7 +1558,8 @@ class LegoStarWarsTCSWorld(World):
                     loc_name = f"{chapter.short_name} Defeat {chapter.boss}"
                     boss_event_location = LegoStarWarsTCSLocation(self.player, loc_name, None, chapter_region)
                     if self.options.only_unique_bosses_count:
-                        boss_event_item = self.create_event(chapter.boss_character_defeated_event_item_name)
+                        boss_event_item = self.create_event(
+                            f"{self.short_name_to_boss_character[chapter.short_name]} Defeated")
                     else:
                         boss_event_item = self.create_event("Boss Defeated")
                     boss_event_location.place_locked_item(boss_event_item)
@@ -1801,8 +1833,8 @@ class LegoStarWarsTCSWorld(World):
         goal_boss_count = self.options.defeat_bosses_goal_amount.value
         if goal_boss_count > 0:
             if self.options.only_unique_bosses_count:
-                boss_items = sorted({SHORT_NAME_TO_CHAPTER_AREA[chapter].boss_character_defeated_event_item_name
-                                     for chapter in self.enabled_bosses})
+                bosses = {self.short_name_to_boss_character[chapter] for chapter in self.enabled_bosses}
+                boss_items = sorted(f"{boss} Defeated" for boss in bosses)
                 assert goal_boss_count <= len(boss_items)
                 add_rule(
                     victory, (

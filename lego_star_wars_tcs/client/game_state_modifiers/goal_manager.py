@@ -107,7 +107,7 @@ class GoalManager(GameStateUpdater):
                     boss_chapters_text = ", ".join(boss_strings[:-1])
                     boss_chapters_text += f" and {boss_strings[-1]}"
                     boss_goal_info_text = (f"{self.goal_bosses_count} unique bosses need to be defeated. There are"
-                                           f" {len(unique_bosses)} bosses enabled: {boss_chapters_text}")
+                                           f" {len(unique_bosses)} unique bosses enabled: {boss_chapters_text}")
             else:
                 self.enabled_unique_bosses = {}
                 sorted_boss_chapters = sorted(enabled_boss_chapters)
