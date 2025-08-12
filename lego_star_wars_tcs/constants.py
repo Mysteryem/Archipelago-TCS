@@ -2,7 +2,7 @@ from enum import auto, IntFlag
 
 GAME_NAME = "Lego Star Wars: The Complete Saga"
 
-AP_WORLD_VERSION: tuple[int, int, int] = (1, 0, 1)
+AP_WORLD_VERSION: tuple[int, int, int] = (1, 1, 0)
 
 
 # todo: These are the abilities from the manual logic, not the real abilities.

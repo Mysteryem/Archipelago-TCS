@@ -1,6 +1,7 @@
 import logging
 from typing import AbstractSet, Callable, Any
 
+from .text_replacer import TextId
 from ..common import ClientComponent
 from ..common_addresses import OPENED_MENU_DEPTH_ADDRESS
 from ..type_aliases import TCSContext, AreaId
@@ -44,6 +45,15 @@ class UnlockedChapterManager(ClientComponent):
 
         self.enabled_chapter_area_ids = {SHORT_NAME_TO_CHAPTER_AREA[chapter_shortname].area_id
                                          for chapter_shortname in enabled_chapters}
+
+        if len(enabled_chapters) == 1:
+            chapters_text = enabled_chapters[0]
+        else:
+            sorted_chapters = sorted(enabled_chapters)
+            chapters_text = ", ".join(sorted_chapters[:-1])
+            chapters_text += f" and {sorted_chapters[-1]}"
+        chapters_info_text = f"Enabled Chapters for this slot: {chapters_text}"
+        ctx.text_replacer.write_custom_string(TextId.SHOP_UNLOCKED_HINT_1, chapters_info_text)
 
         # Set 'All Episodes' unlock requirement.
         if not all_episodes_purchases_enabled:

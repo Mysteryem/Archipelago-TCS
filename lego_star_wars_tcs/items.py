@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING, ClassVar, Literal, Iterable, Mapping, Sequence
+from typing import Optional, TYPE_CHECKING, ClassVar, Literal, Iterable, Mapping, AbstractSet
 
 from BaseClasses import Item, ItemClassification
 from .constants import (
@@ -366,7 +366,7 @@ ITEM_DATA: list[GenericItemData] = [
     _char(88, "Jawa", 22, abilities=SHORTIE),  # Note: Cannot grapple
     _char(89, "Sandtrooper", 51, abilities=IMPERIAL | BLASTER),
     _char(90, "Greedo", 171, abilities=BOUNTY_HUNTER | BLASTER),
-    _char(91, "Imperial Spy", 172, abilities=IMPERIAL),
+    _char(91, "Imperial Spy", 172),
     _char(92, "Beach Trooper", 48, abilities=IMPERIAL | BLASTER),
     _char(93, "Death Star Trooper", 49, abilities=IMPERIAL | BLASTER),
     _char(94, "TIE Fighter Pilot", 50, abilities=IMPERIAL | BLASTER),
@@ -470,10 +470,10 @@ ITEM_DATA: list[GenericItemData] = [
     _extra(-1, "Silhouettes", 0x6, None),
     _extra(-1, "Beep Beep", 0x7, None),
     _extra(-1, "Adaptive Difficulty", 0x2C, None),  # Effectively a difficulty setting, so not randomized.
-    # Custom characters can only use unlocked character equipment, besides some blasters.
-    # todo: Does this include lightsabers if there are no Jedi unlocked?
-    _char(-1, "Custom Character 1", 168, abilities=BLASTER),
-    _char(-1, "Custom Character 2", 169, abilities=BLASTER),
+    # Custom characters can only use unlocked character equipment, besides some blasters. They do not get access to
+    # lightsabers/force unless Jedi are unlocked.
+    _char(188, "STRANGER 1", 168, abilities=BLASTER),
+    _char(189, "STRANGER 2", 169, abilities=BLASTER),
     _vehicle(190, "Sebulba's Pod", 261),
     _vehicle(191, "Zam's Airspeeder", 277),
     _vehicle(192, "Droid Trifighter", 292),
@@ -486,6 +486,10 @@ ITEM_DATA: list[GenericItemData] = [
     MinikitItemData(199, "Minikit", 1),
     MinikitItemData(200, "2 Minikits", 2),
     MinikitItemData(201, "10 Minikits", 10),
+
+    # "Extra Toggle" characters.
+    _char(-1, "Womp Rat", 165),
+    _char(-1, "Skeleton", 231),
 ]
 
 USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
@@ -497,8 +501,15 @@ USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
     # There is currently no glitch logic for the glitchy mess that is Yoda, so ensure Yoda is never excluded by making
     # him Useful.
     "Yoda",
-    # The fastest character.
+    # The fastest character (1.8).
     "Droideka",
+    # The second-fastest character (1.5).
+    "Watto",
+    # The third-fastest character when Super Gonk is active (1.44).
+    "Gonk Droid",
+    # Fastest vehicles.
+    "Anakin's Pod",
+    "Sebulba's Pod",
 }
 
 
@@ -510,6 +521,12 @@ CHARACTERS_AND_VEHICLES_BY_NAME: Mapping[str, GenericCharacterData] = {data.name
 GENERIC_BY_NAME: Mapping[str, GenericItemData] = {data.name: data for data in ITEM_DATA if data.item_type == "Generic"}
 MINIKITS_BY_NAME: Mapping[str, MinikitItemData] = {data.name: data for data in ITEM_DATA
                                                    if isinstance(data, MinikitItemData)}
+NON_VEHICLE_CHARACTER_BY_INDEX: Mapping[int, CharacterData] = {char.character_index: char
+                                                               for char in CHARACTERS_AND_VEHICLES_BY_NAME.values()
+                                                               if isinstance(char, CharacterData)}
+AP_NON_VEHICLE_CHARACTER_INDICES: AbstractSet[int] = {char.character_index
+                                                      for char in NON_VEHICLE_CHARACTER_BY_INDEX.values()
+                                                      if char.is_sendable}
 
 ITEM_NAME_TO_ID: Mapping[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.is_sendable}
 

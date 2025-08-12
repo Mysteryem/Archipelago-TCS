@@ -4,7 +4,7 @@ from time import perf_counter_ns
 from typing import Any
 
 from . import GameStateUpdater
-from ..common_addresses import OPENED_MENU_DEPTH_ADDRESS
+from ..common_addresses import OPENED_MENU_DEPTH_ADDRESS, GameState1
 from ..type_aliases import TCSContext
 from .text_replacer import TextId
 
@@ -32,16 +32,6 @@ TABBED_OUT_WHEN_1_ADDRESS = 0x9868C4
 # Rarely unstable and seen as -1 briefly while playing
 IS_PLAYING_WHEN_0_ADDRESS = 0x297C0AC
 
-# 255: Cutscene
-# 1: Playing, Indy trailer, loading into Cantina, Title crawl
-# 2: In-level 'cutscene' where non-playable characters play an animation and the player has no control
-# 6: Bounty Hunter missions select
-# 7: In custom character creator
-# 8: In Cantina shop
-# 9: Minikits display on outside scrapyard
-# There is another address at 0x925395
-GAME_STATE_ADDRESS = 0x925394
-
 
 class InGameTextDisplay(GameStateUpdater):
     next_allowed_message_time: int = -1
@@ -59,6 +49,9 @@ class InGameTextDisplay(GameStateUpdater):
 
     def queue_message(self, message: str):
         self.message_queue.append(message)
+
+    def priority_message(self, message: str):
+        self.message_queue.appendleft(message)
 
     # A custom minimum duration of more than 4 seconds is irrelevant currently because the message fades out by that
     # point.
@@ -106,6 +99,6 @@ class InGameTextDisplay(GameStateUpdater):
                     and ctx.read_uchar(OPENED_MENU_DEPTH_ADDRESS) == 0
                     # Handles same-level screen transitions.
                     and ctx.read_uchar(IS_PLAYING_WHEN_0_ADDRESS) == 0
-                    and 1 <= ctx.read_uchar(GAME_STATE_ADDRESS) <= 2
+                    and GameState1.is_playing(ctx)
             ):
                 self._display_message(ctx, self.message_queue.popleft())

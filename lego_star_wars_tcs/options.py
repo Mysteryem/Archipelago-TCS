@@ -14,6 +14,7 @@ from Options import (
     OptionGroup,
 )
 
+from .levels import BOSS_UNIQUE_NAME_TO_CHAPTER
 from .locations import LEVEL_SHORT_NAMES_SET
 from .items import CHARACTERS_AND_VEHICLES_BY_NAME, EXTRAS_BY_NAME
 
@@ -36,9 +37,27 @@ class ChapterOptionSet(OptionSet):
         return set().union(*(CHAPTER_OPTION_KEYS[key] for key in self.value))
 
 
+class ChoiceFromStringExtension(Choice):
+    """
+    Extends Choice to add a method to set the value from a string option name, similar to constructing a new Choice
+    instance with Choice.from_text().
+    """
+    def set_from_string(self, s: str):
+        for k, v in self.name_lookup.items():
+            if s == v:
+                self.value = k
+                return
+        raise ValueError(f"{s} is not a valid string for {type(self)}. Expected: {sorted(self.name_lookup.values())}")
+
+
 class MinikitGoalAmount(NamedRange):
     """
     The number of Minikits required to goal.
+
+    If set to zero, Minikits will not be part of the goal, but will still be in the item pool as filler items if Minikit
+    locations are enabled.
+
+    If set to non-zero, and Minikit locations are disabled, the Minikit Bundle Size will be forcefully set to 10.
 
     Each enabled episode chapter shuffles 10 Minikits into the item pool, which may be bundled to reduce the number
     Minikit items in the item pool.
@@ -47,7 +66,7 @@ class MinikitGoalAmount(NamedRange):
     determine how many Minikit's are required to goal.
     """
     display_name = "Goal Minikit Count"
-    range_start = 10
+    range_start = 0
     range_end = 360
     special_range_names = {
         "use_percentage_option": -1,
@@ -72,7 +91,76 @@ class MinikitGoalAmountPercentage(Range):
     default = 75
 
 
-class MinikitBundleSize(Choice):
+class DefeatBossesGoalAmount(Range):
+    """
+    Choose how many bosses must be defeated to goal.
+
+    If set to zero, bosses will not be part of the goal.
+
+    The Chapter a boss is in must be completed for defeating the boss to count.
+    """
+    display_name = "Defeat Bosses Goal Amount"
+    range_start = 0
+    range_end = len(BOSS_UNIQUE_NAME_TO_CHAPTER)
+
+
+class EnabledBossesCount(Range):
+    """
+    Choose the number of bosses that will be present in the world.
+
+    This will automatically be set at least as high as the number of bosses required to goal.
+    This will automatically be set no higher than the maximum of the number of allowed bosses in allowed Chapters.
+    """
+    display_name = "Enabled Bosses Count"
+    range_start = 0
+    range_end = len(BOSS_UNIQUE_NAME_TO_CHAPTER)
+
+
+class AllowedBosses(OptionSet):
+    """
+    Choose bosses that count towards the Defeat Bosses Goal.
+
+    When bosses must be defeated as part of the goal, the Chapters for the bosses in this list will be added to Allowed
+    Chapters list if they are not already in Allowed Chapters list.
+
+    allowed_bosses:
+      - Darth Maul (1-6) # Darth Maul
+      - Zam Wesell (2-1) # Bounty Hunter Pursuit
+      - Jango Fett (2-2) # Discovery On Kamino
+      - Jango Fett (2-4) # Jedi Battle
+      - Count Dooku (2-6) # Count Dooku
+      - Count Dooku (3-2) # Chancellor In Peril
+      - General Grievous (3-3) # General Grievous
+      - Anakin Skywalker (3-6) # Darth Vader
+      - Death Star (4-6) # Rebel Attack
+      - Darth Vader (5-4) # Dagobah
+      - Darth Vader (5-5) # Cloud City Trap
+      - Boba Fett (5-6) # Betrayal Over Bespin
+      - Rancor (6-1) # Jabba's Palace
+      - Boba Fett (6-2) # The Great Pit Of Carkoon
+      - Darth Sidious (6-5) # Jedi Destiny
+      - Death Star II (6-6) # Into The Death Star
+    """
+    display_name = "Allowed Bosses"
+    valid_keys = list(BOSS_UNIQUE_NAME_TO_CHAPTER.keys())
+    default = list(BOSS_UNIQUE_NAME_TO_CHAPTER.keys())
+
+
+class OnlyUniqueBossesCountTowardsGoal(ChoiceFromStringExtension):
+    """
+    When enabled, only unique bosses will count towards your goal. Defeating the same boss character in two separate
+    Chapters will only count as one boss kill.
+
+    When unique bosses are enabled, the maximum number of bosses that can count towards the goal will be reduced to 12,
+    or 11 when Anakin Skywalker counts as the same boss as Darth Vader.
+    """
+    display_name = "Only Count Unique Bosses"
+    option_disabled = 0
+    option_enabled = 1
+    option_enabled_and_count_anakin_as_vader = 2
+
+
+class MinikitBundleSize(ChoiceFromStringExtension):
     """
     Minikit items in the item pool are bundled into items individually worth this number of Minikits.
 
@@ -102,7 +190,7 @@ class EnabledChaptersCount(Range):
     default = 18
 
 
-class AllowedChapterTypes(Choice):
+class AllowedChapterTypes(ChoiceFromStringExtension):
     """Specify additional filtering of the allowed chapters that can be enabled.
 
     - All: No additional filtering, all chapters specified in the Allowed Chapters option are allowed.
@@ -230,6 +318,36 @@ class PreferEntireEpisodes(Toggle):
     display_name = "Prefer Entire Episodes"
 
 
+class EnableMinikitLocations(DefaultOnToggle):
+    """
+    Enable locations for collecting each Minikit in enabled Chapters.
+
+    Minikit locations are progressive within each Chapter (to be changed in the future), so collecting 4 Minikits in any
+    order in a Chapter will send the location checks for Minikit 1, Minikit 2, Minikit 3 and Minikit 4, in that Chapter,
+    in order.
+
+    All Minikits in a Chapter enter logic at the same time, when it is logically possible to reach all Minikits in that
+    Chapter.
+
+    If Minikit locations are not enabled, but the goal requires Minikits, the Minikit Bundle Size will be forcefully set
+    to 10.
+
+    When Minikit locations are not enabled, Bonus levels will not consider the 10/10 Minikit Gold Bricks as part of Gold
+    Brick logic.
+    """
+    display_name = "Enable Minikit Locations"
+
+
+class EnableTrueJediLocations(DefaultOnToggle):
+    """
+    Enable locations for completing True Jedi in each enabled Chapter.
+
+    When True Jedi locations are not enabled, Bonus levels will not consider True Jedi Gold Bricks as part of Gold Brick
+    logic.
+    """
+    display_name = "Enable True Jedi Locations"
+
+
 class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
     """
     Enable locations for unlocking Story mode characters that would normally unlock when completing a Chapter in
@@ -290,7 +408,7 @@ class EnableAllEpisodesCharacterPurchaseLocations(Toggle):
     display_name = "'All Episodes' Character Purchases"
 
 
-class ChapterUnlockRequirement(Choice):
+class ChapterUnlockRequirement(ChoiceFromStringExtension):
     """Choose how Chapters within an Episode are unlocked.
 
     The requirements to access your starting Chapter will be given to you at the start.
@@ -307,7 +425,7 @@ class ChapterUnlockRequirement(Choice):
     default = 0
 
 
-class EpisodeUnlockRequirement(Choice):
+class EpisodeUnlockRequirement(ChoiceFromStringExtension):
     """Choose how Episodes are unlocked.
 
     Note: An Episode door in the Cantina will only unlock when a Chapter within that Episode has been unlocked.
@@ -323,7 +441,7 @@ class EpisodeUnlockRequirement(Choice):
     default = 0
 
 
-class AllEpisodesCharacterPurchaseRequirements(Choice):
+class AllEpisodesCharacterPurchaseRequirements(ChoiceFromStringExtension):
     """The vanilla unlock requirements for purchasing IG-88, Dengar, 4-LOM, Ben Kenobi (Ghost), Anakin Skywalker
     (Ghost), Yoda (Ghost) and R2-Q5 from the shop, are completing every Story mode chapter. The randomizer changes this
     unlock condition because completing every Story mode chapter is unreasonable in most multiworlds and is impossible
@@ -348,8 +466,9 @@ class AllEpisodesCharacterPurchaseRequirements(Choice):
 #     """Extra Toggle characters are included in logic"""
 
 
-class StartingChapter(Choice):
-    """Choose the starting chapter. The Episode the starting Chapter belongs to will be accessible from the start.
+class StartingChapter(ChoiceFromStringExtension):
+    """
+    Choose the starting chapter. The Episode the starting Chapter belongs to will be accessible from the start.
 
     Known issues:
     - If the starting Chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
@@ -369,7 +488,10 @@ class StartingChapter(Choice):
     Starting with 1-3 will also open 1-6.
     Starting with 1-5 will also open 1-6.
     Starting with 3-2 will also open 3-6.
-    Starting with 4-3 will also open 4-2."""
+    Starting with 4-3 will also open 4-2.
+    Starting with 5-3 will also open 6-6 if the Episode Unlock Requirement is set to Open.
+    Starting with 6-6 will also open 5-3 if the Episode Unlock Requirement is set to Open.
+    """
     display_name = "Starting Chapter"
     # todo: Try setting the attributes for specific levels such that they use 1-1 format rather than 1_1.
     # Variable names cannot use hyphens, so the options for specific levels are set programmatically.
@@ -543,6 +665,28 @@ class StartWithDetectors(DefaultOnToggle):
     display_name = "Start With Detector Extras"
 
 
+class FillerReserveCharacters(DefaultOnToggle):
+    """
+    When enabled, reserve space in the item pool for at least as many Characters as enabled locations that would
+    normally unlock Characters in vanilla.
+
+    When disabled, the only reserved space in the item pool for Characters will be the Characters needed to reach all
+    locations. Additional Characters will only get added to the item pool through the Filler Weight: Characters option.
+    """
+    display_name = "Filler Reserve: Characters"
+
+
+class FillerReserveExtras(DefaultOnToggle):
+    """
+    When enabled, reserve space in the item pool for at least as many Extras as enabled locations that would normally
+    unlock Extras in vanilla.
+
+    When disabled, the only reserved space in the item pool for Extras will be the Extras needed to reach all locations.
+    Additional Extras will only get added to the item pool through the Filler Weight: Extras option.
+    """
+    display_name = "Filler Reserve: Extras"
+
+
 class FillerWeightCharacters(Range):
     """
     This option controls the weight of characters when choosing which items to fill out the rest of the space in the
@@ -651,7 +795,7 @@ class MostExpensivePurchaseWithNoScoreMultiplier(NamedRange):
     }
 
 
-class ReceivedItemMessages(Choice):
+class ReceivedItemMessages(ChoiceFromStringExtension):
     """
     Determines whether an in-game notification is displayed when receiving an item.
 
@@ -670,7 +814,7 @@ class ReceivedItemMessages(Choice):
     # option_progression = 2  # Not Yet Implemented
 
 
-class CheckedLocationMessages(Choice):
+class CheckedLocationMessages(ChoiceFromStringExtension):
     """
     Determines whether an in-game notification is displayed when checking a location.
 
@@ -688,7 +832,7 @@ class CheckedLocationMessages(Choice):
     option_none = 1
 
 
-class LogicDifficulty(Choice):
+class LogicDifficulty(ChoiceFromStringExtension):
     # todo: Maybe just remove Extras (other than score multipliers) logic from None difficulty?
     """
     - None:
@@ -740,6 +884,11 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     minikit_goal_amount_percentage: MinikitGoalAmountPercentage
     minikit_bundle_size: MinikitBundleSize
 
+    defeat_bosses_goal_amount: DefeatBossesGoalAmount
+    enabled_bosses_count: EnabledBossesCount
+    allowed_bosses: AllowedBosses
+    only_unique_bosses_count: OnlyUniqueBossesCountTowardsGoal
+
     # Enabled/Available locations.
     # Chapters.
     enabled_chapters_count: EnabledChaptersCount
@@ -751,6 +900,8 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     enable_story_character_unlock_locations: EnableChapterCompletionCharacterUnlockLocations
     enable_bonus_locations: EnableBonusLocations
     enable_all_episodes_purchases: EnableAllEpisodesCharacterPurchaseLocations
+    enable_minikit_locations: EnableMinikitLocations
+    enable_true_jedi_locations: EnableTrueJediLocations
 
     # Logic.
     # logic_difficulty: LogicDifficulty
@@ -764,6 +915,8 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     preferred_characters: PreferredCharacters
     preferred_extras: PreferredExtras
     start_with_detectors: StartWithDetectors
+    filler_reserve_characters: FillerReserveCharacters
+    filler_reserve_extras: FillerReserveExtras
     filler_weight_characters: FillerWeightCharacters
     filler_weight_extras: FillerWeightExtras
     filler_weight_junk: FillerWeightJunk
@@ -776,9 +929,15 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
 
 
 OPTION_GROUPS: list[OptionGroup] = [
-    OptionGroup("Goal Options", [
+    OptionGroup("Minikit Goal Options", [
         MinikitGoalAmount,
         MinikitGoalAmountPercentage,
+    ]),
+    OptionGroup("Bosses Goal Options", [
+        DefeatBossesGoalAmount,
+        EnabledBossesCount,
+        AllowedBosses,
+        OnlyUniqueBossesCountTowardsGoal,
     ]),
     OptionGroup("Chapter Options", [
         EnabledChaptersCount,
@@ -789,6 +948,8 @@ OPTION_GROUPS: list[OptionGroup] = [
         PreferEntireEpisodes,
     ]),
     OptionGroup("Location Options", [
+        EnableMinikitLocations,
+        EnableTrueJediLocations,
         EnableChapterCompletionCharacterUnlockLocations,
         EnableBonusLocations,
         EnableAllEpisodesCharacterPurchaseLocations,
@@ -803,6 +964,8 @@ OPTION_GROUPS: list[OptionGroup] = [
         StartWithDetectors,
         PreferredCharacters,
         PreferredExtras,
+        FillerReserveCharacters,
+        FillerReserveExtras,
         FillerWeightCharacters,
         FillerWeightExtras,
         FillerWeightJunk,

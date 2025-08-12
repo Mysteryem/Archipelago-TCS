@@ -13,12 +13,13 @@ class TextId(IntEnum):
     CHARACTER_NAME_R2_D2 = 103
     CHARACTER_NAME_C_3PO = 104
 
-    EPISODE_1 = 560
-    EPISODE_2 = 1350
-    EPISODE_3 = 1359
-    EPISODE_4 = 500
-    EPISODE_5 = 520
-    EPISODE_6 = 540
+    # The names of each episode. These are always displayed by unlocked Episode doors in the Cantina.
+    EPISODE_1_NAME = 561
+    EPISODE_2_NAME = 1351
+    EPISODE_3_NAME = 1360
+    EPISODE_4_NAME = 501
+    EPISODE_5_NAME = 521
+    EPISODE_6_NAME = 541
 
     # Unlocked hints to mostly be used for information display, e.g. goal requirements.
     SHOP_UNLOCKED_HINT_1 = 630
@@ -54,6 +55,10 @@ class TextId(IntEnum):
     AUTO_HINT_10_HOW_TO_USE_BOUNTY_HUNTER_PANELS = 609
     AUTO_HINT_11_HOW_TO_USE_GRAPPLE_POINTS = 610
     AUTO_HINT_12_HOW_TO_RIDE_CREATURES = 611
+
+    # Likely the "Paused" text displayed below the name of the player that paused the game. This would be an excellent
+    # place to write goal information.
+    PAUSED = 705
 
 
 logger = logging.getLogger("Client")
@@ -182,6 +187,13 @@ class TextReplacer(GameStateUpdater):
 
     def write_vanilla_string(self, string_index: TextId):
         self._write_vanilla_string(string_index.value)
+
+    def suffix_custom_string(self, string_index: TextId, to_append: str, minimum_allocate_size=256):
+        """Write a suffix string onto the end of the vanilla string."""
+        self._set_custom_bytes(string_index.value,
+                               self.get_vanilla_string(string_index).rstrip(b"\x00")
+                               + to_append.encode("utf-8", "replace") + b"\x00",
+                               minimum_allocate_size)
 
     def get_vanilla_string(self, string_index: TextId) -> bytes:
         return self._get_vanilla_string(string_index.value)

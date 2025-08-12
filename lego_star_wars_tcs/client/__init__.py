@@ -2,6 +2,7 @@ import asyncio
 import traceback
 import colorama
 import hashlib
+import random
 
 import ModuleUpdate
 import Utils
@@ -20,9 +21,10 @@ from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandP
 
 from .. import options
 from ..constants import GAME_NAME, AP_WORLD_VERSION
+from ..items import CHARACTERS_AND_VEHICLES_BY_NAME, AP_NON_VEHICLE_CHARACTER_INDICES
 from ..levels import SHORT_NAME_TO_CHAPTER_AREA, CHAPTER_AREAS, ChapterArea
 from ..locations import LOCATION_NAME_TO_ID
-from .common_addresses import ShopType, CantinaRoom
+from .common_addresses import ShopType, CantinaRoom, GameState1, OPENED_MENU_DEPTH_ADDRESS
 from .location_checkers.free_play_completion import FreePlayChapterCompletionChecker
 from .location_checkers.bonus_level_completion import BonusAreaCompletionChecker
 from .location_checkers.true_jedi_and_minikits import TrueJediAndMinikitChecker
@@ -30,6 +32,7 @@ from .location_checkers.shop_purchases import PurchasedExtrasChecker, PurchasedC
 from .game_state_modifiers.extras import AcquiredExtras
 from .game_state_modifiers.characters import AcquiredCharacters
 from .game_state_modifiers.generic import AcquiredGeneric
+from .game_state_modifiers.goal_manager import GoalManager
 from .game_state_modifiers.levels import UnlockedChapterManager
 from .game_state_modifiers.minikits import AcquiredMinikits
 from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs
@@ -101,7 +104,6 @@ CURRENT_LEVEL_ID = 0x951BA0  # 2 bytes (or more)
 # otherwise those extras cannot be bought from the shop.
 # When entering the Cantina, all purchased extras that have not been received will need to be locked because entering
 # the cantina will unlock all extras that have been purchased.
-# How was this 69 before????
 LEVEL_ID_CANTINA = 325
 
 CURRENT_SAVE_SLOT = 0x802014  # byte, 255/-1 for no save file loaded. [0-5] for save file [1-6]
@@ -123,16 +125,33 @@ CURRENT_SAVE_SLOT = 0x802014  # byte, 255/-1 for no save file loaded. [0-5] for 
 CANTINA_ROOM_ID = 0x87B460
 CANTINA_ROOM_WITH_SHOP = 0
 
-# Appears to be 0 while in the shop, and 1 otherwise. Remains 0 when playing a cutscene from within the shop.
-SHOP_CHECK = 0x87B748  # byte
-SHOP_CHECK_IS_IN_SHOP = b"\x00"
 # Appears to be 1 while in the shop, and 0 otherwise. But becomes 0 when playing a cutscene from within the shop.
 # SHOP_CHECK2 = 0x880474  # byte
 ACTIVE_SHOP_TYPE_ADDRESS = 0x8801AC
 
 
-CUSTOM_CHARACTER_1_NAME = 0x86E500  # char[16], null-terminated, so 15 usable characters
-CUSTOM_CHARACTER_2_NAME = 0x86E538  # char[16], null-terminated, so 15 usable characters
+# CUSTOM_CHARACTER_1_NAME = 0x86E500  # char[16], null-terminated, so 15 usable characters
+# CUSTOM_CHARACTER_2_NAME = 0x86E538  # char[16], null-terminated, so 15 usable characters
+
+# Byte
+# 0 = Blue Lightsaber (requires any Jedi unlocked)
+# 1 = Green Lightsaber (default) (requires any Jedi unlocked)
+# 2 = Red Lightsaber (requires any Sith unlocked)
+# 3 = Purple Lighsaber (requires any Jedi unlocked)
+# 4 = Red Blaster (always available)
+# 5 = Blue Blaster (always available)
+# 6 = Pistol (always available)
+# 7 = Shiny Pistol (always available)
+# 8 = Crossbow (bowcaster) (requires *unknown* unlocked (probably Chewbacca or Wookie))
+# 9 = There is no 9
+CUSTOM_CHARACTER_1_WEAPON = 0x86E4F0
+
+# These character IDs/indices update when swapping characters in the Cantina, and the game reads these values to
+# determine what characters P1 and P2 should spawn into the Cantina as.
+# By changing these values and then forcing a hard (reset) load into the Cantina, the client can change the player's
+# characters to whatever the client needs.
+P1_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID = 0x802bd8
+P2_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID = 0x802bdc
 
 
 # # Unverified, but seems to be the case.
@@ -241,13 +260,16 @@ UNUSED_AREA_DWORD_SLOT_NAME_AREAS = slice(UNUSED_AREA_DWORD_SLOT_NAME_START,
 DATA_STORAGE_KEY_SUFFIX = "{team}_{slot}"
 
 COMPLETED_FREE_PLAY_KEY_PREFIX = "tcs_completed_free_play_"
-COMPLETED_FREE_PLAY_KEY_FORMAT = COMPLETED_FREE_PLAY_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
+COMPLETED_TRUE_JEDI_KEY_PREFIX = "tcs_completed_true_jedi_"
+COMPLETED_10_MINIKITS_KEY_PREFIX = "tcs_completed_10_minikits_"
+COMPLETED_BONUSES_KEY_PREFIX = "tcs_completed_bonuses_"
+COLLECTED_POWER_BRICKS_KEY_PREFIX = "tcs_collected_power_bricks_"
 
 LEVEL_ID_KEY_PREFIX = "tcs_current_level_id_"
-LEVEL_ID_KEY_FORMAT = LEVEL_ID_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
-
 CANTINA_ROOM_KEY_PREFIX = "tcs_cantina_room_"
-CANTINA_ROOM_KEY_FORMAT = CANTINA_ROOM_KEY_PREFIX + DATA_STORAGE_KEY_SUFFIX
+# By writing whether the minikit goal has been submitted to datastorage, only one player in same-slot co-op needs to
+# submit the minikits to the minikit display in the cantina's junkyard.
+MINIKIT_GOAL_SUBMITTED_PREFIX = "tcs_minikit_goal_submitted_"
 
 
 class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
@@ -292,6 +314,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     _gog_memory_offset: int = 0
     # In the case of an unrecognised version, an overall memory offset may be set.
     _overall_memory_offset: int = 0
+    _cantina_needs_reload_to_fix_characters: bool = False
 
     # Client state.
     acquired_characters: AcquiredCharacters
@@ -300,6 +323,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     acquired_minikits: AcquiredMinikits
     unlocked_chapter_manager: UnlockedChapterManager
     text_display: InGameTextDisplay
+    goal_manager: GoalManager
     client_expected_idx: int
 
     # Location checkers.
@@ -334,6 +358,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
         self.acquired_minikits = AcquiredMinikits()
+        self.goal_manager = GoalManager()
 
         self.text_display = InGameTextDisplay()
 
@@ -353,9 +378,11 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.fully_connected = False
 
-    @property
-    def datastorage_free_play_completion_key(self) -> str:
-        return COMPLETED_FREE_PLAY_KEY_FORMAT.format(team=self.team, slot=self.slot)
+    def _get_datastorage_key(self, key_prefix: str):
+        return key_prefix + DATA_STORAGE_KEY_SUFFIX.format(team=self.team, slot=self.slot)
+
+    def _is_datastorage_key(self, to_check: str, prefix: str):
+        return to_check.startswith(prefix) and to_check == self._get_datastorage_key(prefix)
 
     def on_print_json(self, args: dict) -> None:
         super().on_print_json(args)
@@ -467,7 +494,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.acquired_minikits.init_from_slot_data(self, slot_data)
         self.text_display.init_from_slot_data(self, slot_data)
 
+        self.true_jedi_and_minikit_checker.init_from_slot_data(self, slot_data)
         self.free_play_completion_checker.init_from_slot_data(self, slot_data)
+        self.goal_manager.init_from_slot_data(self, slot_data)
+        self.client_expected_idx = 0
 
     def on_package(self, cmd: str, args: dict):
         super().on_package(cmd, args)
@@ -486,6 +516,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 self.last_connected_slot = None
             self.last_connected_seed_name = new_seed_name
             self.seed_name = new_seed_name
+            if self.server_version < (0, 6, 2):
+                logger.warning("Lego Star Wars: The Complete Saga works best with servers running AP version 0.6.2 or"
+                               " newer. The connected server is running version %s, so some same-slot co-op and tracker"
+                               " features will not be available.", self.server_version.as_simple_string())
         elif cmd == "Connected":
             if self.last_connected_seed_name is None:
                 # The client should be just about to disconnect from failing to match the server's seed.
@@ -519,6 +553,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 self.on_multiworld_or_slot_changed()
             if self.read_slot_name() is None:
                 self.write_slot_name(new_slot)
+                self.ap_first_time_setup()
             self.disabled_locations = set(LOCATION_NAME_TO_ID.values()) - self.server_locations
 
             self._read_slot_data(slot_data)
@@ -527,43 +562,148 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             self.last_connected_slot = self.auth
             self.auth_status = AuthStatus.AUTHENTICATED
             # Get, and subscribe to, updates to Free Play completions
+            listen_keys = list(
+                map(
+                    self._get_datastorage_key,
+                    (
+                        COMPLETED_FREE_PLAY_KEY_PREFIX,
+                        COMPLETED_TRUE_JEDI_KEY_PREFIX,
+                        COMPLETED_10_MINIKITS_KEY_PREFIX,
+                        COMPLETED_BONUSES_KEY_PREFIX,
+                        COLLECTED_POWER_BRICKS_KEY_PREFIX,
+                        MINIKIT_GOAL_SUBMITTED_PREFIX,
+                    )
+                )
+            )
             Utils.async_start(self.send_msgs(
                 [
                     {
                         "cmd": "Get",
-                        "keys": [self.datastorage_free_play_completion_key]
+                        "keys": listen_keys
                     },
                     {
                         "cmd": "SetNotify",
-                        "keys": [self.datastorage_free_play_completion_key]
+                        "keys": listen_keys
                     }
                 ]
             ))
         elif cmd == "SetReply":
             key: str = args["key"]
-            if key.startswith(COMPLETED_FREE_PLAY_KEY_PREFIX) and key == self.datastorage_free_play_completion_key:
+            if self._is_datastorage_key(key, COMPLETED_FREE_PLAY_KEY_PREFIX):
                 value = args["value"]
                 if value is not None:
-                    self.free_play_completion_checker.update_from_datastorage(value)
+                    self.free_play_completion_checker.update_from_datastorage(self, value)
+            elif self._is_datastorage_key(key, COMPLETED_TRUE_JEDI_KEY_PREFIX):
+                value = args["value"] or ()
+                previous_value = args["original_value"] or ()
+                new_values = set(value)
+                new_values.difference_update(previous_value)
+                if new_values:
+                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                        self, new_true_jedi_area_ids=new_values)
+            elif self._is_datastorage_key(key, COMPLETED_10_MINIKITS_KEY_PREFIX):
+                value = args["value"] or ()
+                previous_value = args["original_value"] or ()
+                new_values = set(value)
+                new_values.difference_update(previous_value)
+                if new_values:
+                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                        self, new_minikits_gold_brick_area_ids=new_values)
+            elif self._is_datastorage_key(key, COMPLETED_BONUSES_KEY_PREFIX):
+                value = args["value"] or ()
+                previous_value = args["original_value"] or ()
+                new_values = set(value)
+                new_values.difference_update(previous_value)
+                if new_values:
+                    self.bonus_area_completion_checker.update_from_datastorage(self, new_values)
+            elif self._is_datastorage_key(key, COLLECTED_POWER_BRICKS_KEY_PREFIX):
+                value = args["value"] or ()
+                previous_value = args["original_value"] or ()
+                new_values = set(value)
+                new_values.difference_update(previous_value)
+                if new_values:
+                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                        self, new_power_brick_area_ids=new_values)
+            elif self._is_datastorage_key(key, MINIKIT_GOAL_SUBMITTED_PREFIX):
+                value = args["value"]
+                if value:
+                    self.goal_manager.complete_minikit_goal_from_datastorage(self)
 
-    def update_datastorage_free_play_completion(self, area_ids: list[int]):
+        elif cmd == "Retrieved":
+            keys: dict[str, typing.Any] = args["keys"]
+            completed_free_play = keys.get(self._get_datastorage_key(COMPLETED_FREE_PLAY_KEY_PREFIX))
+            if completed_free_play:
+                self.free_play_completion_checker.update_from_datastorage(self, completed_free_play)
+            completed_true_jedi = keys.get(self._get_datastorage_key(COMPLETED_TRUE_JEDI_KEY_PREFIX))
+            if completed_true_jedi:
+                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self, new_true_jedi_area_ids=completed_true_jedi)
+            completed_10_minikits = keys.get(self._get_datastorage_key(COMPLETED_10_MINIKITS_KEY_PREFIX))
+            if completed_10_minikits:
+                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self, new_minikits_gold_brick_area_ids=completed_10_minikits)
+            completed_bonuses = keys.get(self._get_datastorage_key(COMPLETED_BONUSES_KEY_PREFIX))
+            if completed_bonuses:
+                self.bonus_area_completion_checker.update_from_datastorage(self, completed_bonuses)
+            collected_power_bricks = keys.get(self._get_datastorage_key(COLLECTED_POWER_BRICKS_KEY_PREFIX))
+            if collected_power_bricks:
+                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self, new_power_brick_area_ids=collected_power_bricks)
+            completed_minikit_goal = keys.get(self._get_datastorage_key(MINIKIT_GOAL_SUBMITTED_PREFIX))
+            if completed_minikit_goal:
+                self.goal_manager.complete_minikit_goal_from_datastorage(self)
+
+    def _update_datastorage_area_ids(self, key_prefix: str, area_ids: list[int], log_name: str):
+        if self.server_version < (0, 6, 2):
+            # Using the "update" operation on list values was only added in AP 0.6.2, so an older server version will
+            # disconnect the client.
+            return
         if not area_ids:
             return
-        debug_logger.info("Sending Free Play Completion area_ids to datastorage: %s", area_ids)
+        debug_logger.info("Sending %s area_ids to datastorage: %s", log_name, area_ids)
         Utils.async_start(self.send_msgs([{
             "cmd": "Set",
-            "key": self.datastorage_free_play_completion_key,
+            "key": self._get_datastorage_key(key_prefix),
             "default": [],
             "want_reply": False,
             "operations": [{"operation": "update", "value": area_ids}]
+        }]))
+
+    def update_datastorage_free_play_completion(self, area_ids: list[int]):
+        self._update_datastorage_area_ids(COMPLETED_FREE_PLAY_KEY_PREFIX, area_ids, "Free Play Completion")
+
+    def update_datastorage_true_jedi_completion(self, area_ids: list[int]):
+        self._update_datastorage_area_ids(COMPLETED_TRUE_JEDI_KEY_PREFIX, area_ids, "True Jedi Completion")
+
+    def update_datastorage_10_minikits_completion(self, area_ids: list[int]):
+        self._update_datastorage_area_ids(COMPLETED_10_MINIKITS_KEY_PREFIX, area_ids, "10/10 Minikits Completion")
+
+    def update_datastorage_bonuses_completion(self, area_ids: list[int]):
+        self._update_datastorage_area_ids(COMPLETED_BONUSES_KEY_PREFIX, area_ids, "Bonuses Completion")
+
+    def update_datastorage_power_bricks_collected(self, area_ids: list[int]):
+        self._update_datastorage_area_ids(COLLECTED_POWER_BRICKS_KEY_PREFIX, area_ids, "Power Bricks Collected")
+
+    def update_datastorage_minikits_goal_submitted(self):
+        debug_logger.info("Sending minikit-goal-submitted to datastorage")
+        Utils.async_start(self.send_msgs([{
+            "cmd": "Set",
+            "key": self._get_datastorage_key(MINIKIT_GOAL_SUBMITTED_PREFIX),
+            "default": False,
+            "want_reply": False,
+            "operations": [{"operation": "replace", "value": True}]
         }]))
 
     def on_multiworld_or_slot_changed(self):
         # The client is connecting to a different multiworld or slot to before, so reset all persisted client data.
         self.reset_persisted_client_data()
 
-    def is_location_sendable(self, location_id: int):
+    def is_location_unchecked(self, location_id: int):
+        """Return whether a location id exists, but has not been checked."""
         return location_id not in self.checked_locations and location_id not in self.disabled_locations
+
+    def is_location_sendable(self, location_id: int):
+        return location_id not in self.disabled_locations
 
     def run_gui(self):
         from kvui import GameManager
@@ -870,7 +1010,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             # Update the datastorage value in the background.
             Utils.async_start(self.send_msgs([{
                 "cmd": "Set",
-                "key": LEVEL_ID_KEY_FORMAT.format(slot=self.slot, team=self.team),
+                "key": self._get_datastorage_key(LEVEL_ID_KEY_PREFIX),
                 "want_reply": False,
                 "operations": [{"operation": "replace", "value": new_level_id}]
             }]))
@@ -896,7 +1036,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             # Update the datastorage value in the background.
             Utils.async_start(self.send_msgs([{
                 "cmd": "Set",
-                "key": CANTINA_ROOM_KEY_FORMAT.format(slot=self.slot, team=self.team),
+                "key": self._get_datastorage_key(CANTINA_ROOM_KEY_PREFIX),
                 "want_reply": False,
                 "operations": [{"operation": "replace", "value": new_cantina_room.value}]
             }]))
@@ -925,15 +1065,181 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         else:
             return file_number
 
-    def is_in_shop(self, shop_type: ShopType) -> bool:
+    def is_in_shop(self, shop_type: ShopType | None = None) -> bool:
         """Check whether the player is currently in a shop. Does not check for being in-game."""
-        # todo: Just the SHOP_CHECK is probably enough to determine whether the player is in a shop, but it is not clear
-        #  if that byte is used for something more general than only the shop.
-        # todo: text_display.GAME_STATE_ADDRESS looks like it can also be used to check if the player is in the shop.
-        return (self.read_byte(SHOP_CHECK) == SHOP_CHECK_IS_IN_SHOP
+        return (GameState1.IN_CANTINA_SHOP.is_set(self)
                 and self.read_current_level_id() == LEVEL_ID_CANTINA  # Additionally check the player is in the Cantina,
                 and self.read_uchar(CANTINA_ROOM_ID) == CantinaRoom.SHOP_ROOM.value  # and in the room with the shops.
-                and self.read_uchar(ACTIVE_SHOP_TYPE_ADDRESS) == shop_type.value)
+                and (shop_type is None or self.read_uchar(ACTIVE_SHOP_TYPE_ADDRESS) == shop_type.value))
+
+    def _load_level(self, level_id: int, reset_door: bool = False, hard_reset: bool = False):
+        """
+
+        :param level_id: ID of the level to load
+        :param reset_door: Reset the saved door. The saved door controls where the player spawns
+        :param hard_reset: Fully reload the level, even when the player is in the level already
+        :return:
+        """
+        if not 0 <= level_id <= 333:
+            raise ValueError(f"{level_id} is not a valid level ID")
+        if self.is_in_game():
+            # Based on BrickBench, with addresses converted to Steam addresses.
+            if reset_door:
+                self.write_byte(0x9513b8, 0)
+            if hard_reset:
+                self.write_uint(0x803784, 0xFFFFFFFF)
+                self.write_uint(0x93b2ac, 0x20)
+            level_data_start_addr = self.read_uint(0x951b78)
+            # Each level struct is 0x130 bytes. Level IDs are consecutive according to the order they are defined in
+            # LEVELS.TXT.
+            target_level_data_addr = level_data_start_addr + 0x130 * level_id
+            self.write_uint(0x951b80, target_level_data_addr)
+            # Some sort of flag that BrickBench sets. I don't know what this does.
+            self.write_uint(0x93d850, 1)
+
+    def reload_cantina(self, hard: bool = False) -> bool:
+        if self.is_in_game() and self.read_current_cantina_room() == CantinaRoom.SHOP_ROOM:
+            if self.is_in_shop():
+                # Reloading the cantina while the shop is open gets the camera stuck in the shop, with seemingly no way
+                # to fix.
+                return False
+            else:
+                # The Cantina's level ID is 325
+                self._load_level(325, hard_reset=hard)
+                return True
+        return False
+
+    def ap_first_time_setup(self):
+        # Custom Character 1 starts with a lightsaber, but the player might not have Jedi unlocked, meaning that Custom
+        # Character 1 should not be allowed to use a lightsaber.
+        # Custom Characters always have access to blasters, so give Custom Character 1 a Red Blaster.
+        self.write_byte(CUSTOM_CHARACTER_1_WEAPON, 4)
+
+    @staticmethod
+    def _get_valid_replacement_characters(unlocked_characters: set[int], needed_count: int) -> list[int]:
+        """
+        Get 2 valid replacement characters, or a single 'Glup' replacement character if there are no valid replacement
+        characters.
+        """
+        # Prioritise good characters.
+        replacements = []
+        needed_remaining = needed_count
+
+        # Pick from unlocked characters, except Custom Characters, who are not allowed in the Cantina because that is
+        # where they are edited.
+        not_allowed = {
+            CHARACTERS_AND_VEHICLES_BY_NAME["STRANGER 1"].character_index,
+            CHARACTERS_AND_VEHICLES_BY_NAME["STRANGER 2"].character_index,
+        }
+        allowed_character_indices = unlocked_characters - not_allowed
+        allowed_character_indices.intersection_update(AP_NON_VEHICLE_CHARACTER_INDICES)
+
+        to_pick_from = sorted(allowed_character_indices)
+        picks = random.sample(to_pick_from, min(needed_remaining, len(to_pick_from)))
+        replacements.extend(picks)
+        needed_remaining -= len(picks)
+
+        if needed_remaining == 0:
+            return replacements
+        else:
+            # Fill remaining spots with the "Skeleton" "Extra Toggle" character.
+            replacements.extend([CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index] * needed_remaining)
+            return replacements
+
+    def _get_player_character_addr(self, player: int) -> int:
+        # Note: The returned address from this function is not static for the current game instance. Whenever P1 swaps
+        #  character with P2 (or P3/P4/etc. for Story mode), the value of this pointer changes to point to the other
+        #  character.
+        # The data at a character address includes things like the character's position vector and rotation.
+        if player == 1:
+            # There seems to be the same pointer value at +0x20, but Brick Bench uses 0x93d810 (GOG), which is 0x93d7f0
+            # (STEAM) used below, so lets use that one.
+            # Maybe 0x93d830 can be different in some cases?
+            ptr_addr = 0x93d7f0
+        elif player == 2:
+            ptr_addr = 0x93d7f4
+        else:
+            raise ValueError(f"Invalid player {player}")
+        character_address = self.read_uint(ptr_addr)
+        return character_address
+
+    def _get_character_data_address(self, character_address: int) -> int:
+        # Each character has a pointer to its character data, which controls how the character looks, what animations it
+        # plays, and probably what abilities the character has and other static data that can be referenced by multiple
+        # characters with the same character data, e.g. all the regular Battle Droids in 1-1 are separate character
+        # instances, but each reference the same Battle Droid character data.
+        if character_address == 0:
+            # NULL pointer
+            return 0
+        character_data_address = self.read_uint(character_address + 0x50, raw=True)
+        return character_data_address
+
+    def _get_character_id(self, character_data_address) -> int | None:
+        if character_data_address == 0:
+            return None
+        # Character ID is the first 2 bytes
+        character_id = self.read_ushort(character_data_address + 0x0, raw=True)
+        return character_id
+
+    def _get_player_character_id(self, player: int) -> int | None:
+        return self._get_character_id(self._get_character_data_address(self._get_player_character_addr(player)))
+
+    async def reload_cantina_if_invalid_characters(self):
+        unlocked_characters = self.acquired_characters.unlocked_characters
+
+        if not unlocked_characters:
+            # If connected, there should always be at least 1 character unlocked, even if it is a vehicle character.
+            return
+
+        if (
+                self.is_in_game()
+                and self.read_current_level_id() == LEVEL_ID_CANTINA
+                and GameState1.PLAYING_OR_TRAILER_OR_CANTINA_LOAD_OR_CHAPTER_TITLE_CRAWL.is_set(self)
+                and self.read_uchar(OPENED_MENU_DEPTH_ADDRESS) == 0
+        ):
+            if self._cantina_needs_reload_to_fix_characters:
+                if self.reload_cantina(hard=True):
+                    await asyncio.sleep(1.0)
+                    self._cantina_needs_reload_to_fix_characters = False
+                return
+            # Skeleton is the backup character the client forces when the player does not have at least 2 unlocked
+            # non-vehicle characters.
+            skeleton_character_index = CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index
+            needed_replacements = 0
+            p1_character_id = self._get_player_character_id(1)
+            if (p1_character_id is not None
+                    and p1_character_id != skeleton_character_index
+                    and p1_character_id not in unlocked_characters):
+                needed_replacements += 1
+                replace_p1 = True
+                debug_logger.info("P1 is character ID %i in the Cantina, which is not unlocked. Picking a replacement"
+                                  " character and reloading the Cantina.", p1_character_id)
+            else:
+                replace_p1 = False
+            p2_character_id = self._get_player_character_id(2)
+            if (p2_character_id is not None
+                    and p2_character_id != skeleton_character_index
+                    and p2_character_id not in unlocked_characters):
+                needed_replacements += 1
+                replace_p2 = True
+                debug_logger.info("P2 is character ID %i in the Cantina, which is not unlocked. Picking a replacement"
+                                  " character and reloading the Cantina.", p2_character_id)
+            else:
+                replace_p2 = False
+            if needed_replacements == 0:
+                # Both characters are unlocked or are already Skeleton, so there is nothing to do.
+                return
+            replacements = self._get_valid_replacement_characters(unlocked_characters, needed_replacements)
+            if replace_p1:
+                self.write_uint(P1_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID, replacements.pop(0))
+            if replace_p2:
+                self.write_uint(P2_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID, replacements.pop(0))
+
+            if self.reload_cantina(hard=True):
+                await asyncio.sleep(1.0)
+            else:
+                # If the reload failed (e.g. the player is in the shop or the game is paused), try again.
+                self._cantina_needs_reload_to_fix_characters = True
 
     def set_game_expected_idx(self, idx: int) -> None:
         # The expected idx is stored in the unused 4 bytes at the end of Negotiations' (1-1's) save data.
@@ -970,7 +1276,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         if code in self.acquired_generic.receivable_ap_ids:
             self.acquired_generic.receive_generic(self, code)
         elif code in self.acquired_minikits.receivable_ap_ids:
-            self.acquired_minikits.receive_minikit(code)
+            self.acquired_minikits.receive_minikit(self, code)
         elif code in self.acquired_characters.receivable_ap_ids:
             self.acquired_characters.receive_character(code)
             self.unlocked_chapter_manager.on_character_or_episode_unlocked(code)
@@ -988,6 +1294,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         Used when deliberately disconnecting from a server.
         """
+        self.finished_game = False
+        self.locations_checked.clear()
         self.acquired_extras = AcquiredExtras()
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
@@ -1003,6 +1311,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.purchased_extras_checker = PurchasedExtrasChecker()
         self.purchased_characters_checker = PurchasedCharactersChecker()
         self.bonus_area_completion_checker = BonusAreaCompletionChecker()
+
+        self.goal_manager = GoalManager()
 
         if clear_text_display_queue:
             self.text_display.message_queue.clear()
@@ -1105,18 +1415,21 @@ async def game_watcher_check_save_file(ctx: LegoStarWarsTheCompleteSagaContext,
         # If the player loads a different save file, re-check the multiworld seed and slot name and reset
         # persistent client data if either the seed or slot name differ.
         last_save_file = ctx.last_loaded_save_file
-        if current_save_file != last_save_file:
+        if (current_save_file != last_save_file
+                or (only_just_loaded_into_game and current_save_file is None and last_save_file is None)):
             last_slot_name = ctx.last_connected_slot
             last_seed_name = ctx.last_connected_seed_name
 
             # The player is allowed to exit to the main menu and start a new game.
             if current_save_file is None:
-                if last_slot_name is not None:
+                if last_slot_name is not None and ctx.read_slot_name() is None:
                     logger.info("Copied the last connected slot name to the new save file.")
                     ctx.write_slot_name(last_slot_name)
-                if last_seed_name is not None:
+                if last_seed_name is not None and ctx.read_seed_name_hash() is None:
                     logger.info("Copied the last connected multiworld seed hash to the new save file.")
                     ctx.write_seed_name_hash(last_seed_name)
+                # The save file is new, so run first-time setup.
+                ctx.ap_first_time_setup()
             else:
                 # The player *could* have another save file with the same seed and slot, which would be
                 # unusual, but acceptable.
@@ -1200,8 +1513,8 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                         # main menu.
                         last_connected_slot_name = ctx.last_connected_slot
                         if last_connected_slot_name is not None:
-                            log_message(f"Load back into the save file, or a new game (Gold Brick progress will be"
-                                        f" lost), to continue as {last_connected_slot_name}.")
+                            log_message(f"Load back into the save file, or a new game, to continue as"
+                                        f" {last_connected_slot_name}.")
                         else:
                             log_message("Load back into a save file or a new game to continue.")
                     else:
@@ -1243,6 +1556,7 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     await give_items(ctx)
 
                     # Update game state for received items.
+                    await ctx.reload_cantina_if_invalid_characters()
                     await ctx.acquired_characters.update_game_state(ctx)
                     await ctx.acquired_extras.update_game_state(ctx)
                     await ctx.acquired_generic.update_game_state(ctx)
@@ -1283,12 +1597,14 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                         await ctx.bonus_area_completion_checker.check_completion(ctx, new_location_checks)
 
                         # Send newly cleared locations to the server, if there are any.
-                        await ctx.check_locations(new_location_checks)
+                        actually_new_location_checks = await ctx.check_locations(new_location_checks)
+                        ctx.locations_checked.update(actually_new_location_checks)
+
+                        await ctx.goal_manager.update_game_state(ctx)
 
                         # Check for goal completion.
                         if not ctx.finished_game:
-                            victory = ctx.acquired_minikits.minikit_count >= ctx.acquired_minikits.goal_minikit_count
-                            if victory:
+                            if ctx.goal_manager.is_goal_complete(ctx):
                                 await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
                                 ctx.finished_game = True
                 sleep_time = 0.1

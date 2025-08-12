@@ -16,11 +16,17 @@ future.
 ## Optional Software
 - [Lego Star Wars: The Complete Saga Archipelago Tracker](https://github.com/Mysteryem/TCS_AP_PopTracker/releases/latest), 
 for use with [PopTracker](https://github.com/black-sliver/PopTracker/releases)
-- [Dxwnd](https://dxwnd.org/) to play in a window instead of fullscreen
-  - Works better with the GOG version.
-  - The Steam version can sometimes crash when starting when run through Dxwnd, but it is stable once it starts
-  - In Dxwnd, use `File`>`Import`, and then open the `Lego Star Wars - The Complete Saga` file int the `DxWnd\exports`
-folder.
+- [Dxwnd](https://dxwnd.org/) to play in a window instead of fullscreen (works better with the GOG version of the game)
+  - In Dxwnd, use `File`>`Import`, and then open the `Lego Star Wars - The Complete Saga` file in the `DxWnd\exports`
+folder. After importing, right click and `Modify`, then adjust the `Path` to your `LEGOStarWarsSaga.exe` and adjust the
+window size to your liking (`W` and `H` in `Main`>`Position`>`Window initial position & size`)
+  - Additional steps for Steam version:
+    - The Steam version can sometimes crash when starting when run through Dxwnd, but it is stable once it has managed
+to start. You should at least sometimes get to the TTGames logo screen before crashing if everything is set up
+correctly. Crashes can occur as late as the title screen.
+    - If Lego Star Wars: The Complete Saga is installed on a separate drive to Steam, and you get
+`Application load error 5:0000065434` when starting the game through DxWnd, copy your `Steam.exe` file into the same
+directory as your `LEGOStarWarsSaga.exe`.
 - [Universal Tracker](https://discord.com/channels/731205301247803413/1367270230635839539) for Archipelago (links to the
 Universal Tracker channel in the Archipelago discord server)
 

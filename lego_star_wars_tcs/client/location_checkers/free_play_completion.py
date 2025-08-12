@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Iterable
 
 from ...levels import CHAPTER_AREAS, ChapterArea, AREA_ID_TO_CHAPTER_AREA
 from ...locations import LOCATION_NAME_TO_ID, LEVEL_COMMON_LOCATIONS
@@ -123,12 +123,13 @@ class FreePlayChapterCompletionChecker(ClientComponent):
                 self.sent_locations.add(STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id])
                 completed_area_ids.append(area_id)
         ctx.update_datastorage_free_play_completion(completed_area_ids)
+        ctx.goal_manager.tag_for_update("boss")
 
-    def update_from_datastorage(self, area_ids: list[int]):
+    def update_from_datastorage(self, ctx: TCSContext, area_ids: Iterable[int]):
         debug_logger.info("Updating Free Play Completion area_ids from datastorage: %s", area_ids)
         for area_id in area_ids:
             self.completed_free_play.add(area_id)
-            area = AREA_ID_TO_CHAPTER_AREA[area_id]
+            ctx.goal_manager.tag_for_update("boss")
             # The locations should have been sent already, but try sending again just in-case.
             self.sent_locations.update(self.chapter_completion_locations.get(area_id, ()))
 
@@ -153,6 +154,7 @@ class FreePlayChapterCompletionChecker(ClientComponent):
                 ctx.update_datastorage_free_play_completion([area_id])
                 self.completed_free_play.add(area.area_id)
                 ctx.write_byte(area.address + area.UNLOCKED_OFFSET, 0b11)
+                ctx.goal_manager.tag_for_update("boss")
 
         # Not required because only the intersection of ctx.missing_locations will be sent to the server, but removing
         # checked locations (server state) here helps with debugging by reducing self.sent_locations to only new checks.

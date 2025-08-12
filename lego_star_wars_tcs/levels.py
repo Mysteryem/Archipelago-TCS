@@ -89,6 +89,7 @@ class ChapterArea:
     power_brick_location_name: str = field(init=False)
     power_brick_studs_cost: int = field(init=False)
     all_minikits_ability_requirements: CharacterAbility = field(init=False)
+    boss: str | None = field(init=False)
 
     def __post_init__(self):
         object.__setattr__(self, "short_name", f"{self.episode}-{self.number_in_episode}")
@@ -113,6 +114,23 @@ class ChapterArea:
 
         all_minikits_ability_requirements = ALL_MINIKITS_REQUIREMENTS[self.short_name]
         object.__setattr__(self, "all_minikits_ability_requirements", all_minikits_ability_requirements)
+
+        boss = BOSS_CHARACTERS_BY_SHORTNAME.get(self.short_name)
+        object.__setattr__(self, "boss", boss)
+
+    @property
+    def unique_boss_name(self) -> str | None:
+        boss = self.boss
+        if boss is None:
+            return None
+        return f"{boss} ({self.short_name})"
+
+    @property
+    def boss_character_defeated_event_item_name(self) -> str:
+        boss = self.boss
+        if boss is None:
+            raise ValueError(f"{self} does not have a boss")
+        return f"{boss} Defeated"
 
 
 @dataclass(frozen=True)
@@ -394,7 +412,7 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "2-1": VEHICLE_TIE,
     "2-2": SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE,
     "2-3": HIGH_JUMP | IMPERIAL | SHORTIE,
-    "2-4": HIGH_JUMP,
+    "2-4": HIGH_JUMP | SHORTIE,
     "2-5": VEHICLE_TIE,
     "2-6": HIGH_JUMP | BLASTER | ASTROMECH,
     "3-1": CharacterAbility.NONE,
@@ -412,7 +430,7 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "5-1": VEHICLE_TIE,
     "5-2": SITH | HOVER | ASTROMECH | BOUNTY_HUNTER,
     "5-3": VEHICLE_TOW | VEHICLE_TIE,
-    "5-4": SITH | BOUNTY_HUNTER,
+    "5-4": SITH | BOUNTY_HUNTER | SHORTIE,
     "5-5": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
     "5-6": SITH | BOUNTY_HUNTER,
     "6-1": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
@@ -421,6 +439,25 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "6-4": BOUNTY_HUNTER,
     "6-5": HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE,
     "6-6": VEHICLE_TIE,
+}
+
+BOSS_CHARACTERS_BY_SHORTNAME: dict[str, str] = {
+    "1-6": "Darth Maul",
+    "2-1": "Zam Wesell",
+    "2-2": "Jango Fett",
+    "2-4": "Jango Fett",
+    "2-6": "Count Dooku",
+    "3-2": "Count Dooku",
+    "3-3": "General Grievous",
+    "3-6": "Anakin Skywalker",
+    "4-6": "Death Star",
+    "5-4": "Darth Vader",
+    "5-5": "Darth Vader",
+    "5-6": "Boba Fett",
+    "6-1": "Rancor",
+    "6-2": "Boba Fett",
+    "6-5": "Darth Sidious",
+    "6-6": "Death Star II",
 }
 
 # TODO: Record Level IDs, these would mostly be there to help make map switching in the tracker easier, and would
@@ -553,3 +590,7 @@ VEHICLE_CHAPTER_SHORTNAMES: frozenset[str] = frozenset({
     "5-3",
     "6-6",
 })
+
+BOSS_UNIQUE_NAME_TO_CHAPTER: dict[str, ChapterArea] = {
+    chapter.unique_boss_name: chapter for chapter in CHAPTER_AREAS if chapter.boss
+}
