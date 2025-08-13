@@ -66,11 +66,17 @@ class GoalManager(GameStateUpdater):
         server_apworld_version = tuple(slot_data["apworld_version"])
         if server_apworld_version < (1, 1, 0):
             # Minikit goal was the only goal at this point.
+            goal_bosses_count = 0
+        else:
+            goal_bosses_count = slot_data["defeat_bosses_goal_amount"]
+
+        if goal_bosses_count <= 0:
             self.goal_bosses_count = 0
             self.enabled_boss_chapters = set()
             self.enabled_unique_bosses = {}
             boss_goal_info_text = "Bosses do not need to be defeated to goal."
         else:
+            self.goal_bosses_count = goal_bosses_count
             self.goal_bosses_count = slot_data["defeat_bosses_goal_amount"]
             enabled_boss_chapters = set(slot_data["enabled_bosses"])
             self.enabled_boss_chapters = {SHORT_NAME_TO_CHAPTER_AREA[chapter].area_id
