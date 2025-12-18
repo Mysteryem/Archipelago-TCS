@@ -6,6 +6,7 @@ import random
 
 import ModuleUpdate
 import Utils
+from BaseClasses import ItemClassification
 from NetUtils import ClientStatus
 from worlds._bizhawk.context import AuthStatus
 
@@ -21,23 +22,36 @@ from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandP
 
 from .. import options
 from ..constants import GAME_NAME, AP_WORLD_VERSION
-from ..items import CHARACTERS_AND_VEHICLES_BY_NAME, AP_NON_VEHICLE_CHARACTER_INDICES
 from ..levels import SHORT_NAME_TO_CHAPTER_AREA, CHAPTER_AREAS, ChapterArea
 from ..locations import LOCATION_NAME_TO_ID
-from .common_addresses import ShopType, CantinaRoom, GameState1, OPENED_MENU_DEPTH_ADDRESS
+from .common_addresses import ShopType, CantinaRoom, GameState1, OPENED_MENU_DEPTH_ADDRESS, CURRENT_P_AREA_DATA_ADDRESS
 from .location_checkers.free_play_completion import FreePlayChapterCompletionChecker
 from .location_checkers.bonus_level_completion import BonusAreaCompletionChecker
-from .location_checkers.true_jedi_and_minikits import TrueJediAndMinikitChecker
+from .location_checkers.ridesanity import RidesanityChecker
+from .location_checkers.true_jedi_and_minikits import TrueJediAndPowerBrickAndMinikitChecker
 from .location_checkers.shop_purchases import PurchasedExtrasChecker, PurchasedCharactersChecker
+from .events import (
+    EventManager,
+    OnLevelChangeEvent,
+    OnAreaChangeEvent,
+    OnReceiveSlotDataEvent,
+    OnGameWatcherTickEvent,
+    OnPlayerCharacterIdChangeEvent,
+)
+from .game_state_modifiers import ClientComponent
 from .game_state_modifiers.extras import AcquiredExtras
 from .game_state_modifiers.characters import AcquiredCharacters
+from .game_state_modifiers.cantina_reloader import CantinaReloader
+from .game_state_modifiers.death_link_manager import DeathLinkManager
 from .game_state_modifiers.generic import AcquiredGeneric
 from .game_state_modifiers.goal_manager import GoalManager
 from .game_state_modifiers.levels import UnlockedChapterManager
 from .game_state_modifiers.minikits import AcquiredMinikits
-from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs
+from .game_state_modifiers.power_ups import PowerUpReceiver
+from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs_item
 from .game_state_modifiers.text_display import InGameTextDisplay
 from .game_state_modifiers.text_replacer import TextReplacer
+from .game_state_modifiers.uncap_high_jump import UncapHighJump
 
 
 logger = logging.getLogger("Client")
@@ -74,7 +88,7 @@ VERSION_CHECK_GOG_OFFSET = VERSION_CHECK_ADDRESS_STEAM - VERSION_CHECK_ADDRESS_G
 MEMORY_OFFSET_STEAM = 0
 MEMORY_OFFSET_GOG = 0x20
 # Addresses greater than this need to be offset by 0x20 when the GOG version is being used.
-# It is possible that the cutoff point is earlier, somewhere between 0x802000 and 0x855000
+# It is possible that the cutoff point is earlier, somewhere between 0x802d98 and 0x855000
 GOG_MEMORY_OFFSET_START = 0x855000
 
 # class MemoryBlock(NamedTuple):
@@ -145,13 +159,6 @@ ACTIVE_SHOP_TYPE_ADDRESS = 0x8801AC
 # 8 = Crossbow (bowcaster) (requires *unknown* unlocked (probably Chewbacca or Wookie))
 # 9 = There is no 9
 CUSTOM_CHARACTER_1_WEAPON = 0x86E4F0
-
-# These character IDs/indices update when swapping characters in the Cantina, and the game reads these values to
-# determine what characters P1 and P2 should spawn into the Cantina as.
-# By changing these values and then forcing a hard (reset) load into the Cantina, the client can change the player's
-# characters to whatever the client needs.
-P1_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID = 0x802bd8
-P2_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID = 0x802bdc
 
 
 # # Unverified, but seems to be the case.
@@ -276,21 +283,19 @@ class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
     def __init__(self, ctx: CommonContext):
         super().__init__(ctx)
 
-    def _cmd_debug_message(self):
-        """Queue a debug message to be displayed in-game"""
-        if isinstance(self.ctx, LegoStarWarsTheCompleteSagaContext):
-            if self.ctx.slot:
-                import random
-                self.ctx.text_display.queue_message(random.choice([
-                    "The quick brown fox jumps over the lazy dog!",  # English
-                    "Voix ambiguë d'un cœur qui, au zéphyr, préfère les jattes de kiwis.",  # French
-                    "Victor jagt zwölf Boxkämpfer quer über den großen Sylter Deich",  # German
-                    "Jeżu klątw, spłódź Finom część gry hańb!",  # Polish
-                    "В чащах юга жил бы цитрус? Да, но фальшивый экземпляр!",  # Russian
-                    # Japanese does not display, despite there being Japanese localization files...
-                    "いろはにほへと ちりぬるを わかよたれそ つねならむ うゐのおくやま けふこえて あさきゆめみし ゑひもせす（ん）",  # Japanese
-                    "(2)色は匂へど 散りぬるを 我が世誰ぞ 常ならむ 有為の奥山 今日越えて 浅き夢見じ 酔ひもせず（ん）",  # Japanese 2
-                ]))
+    def _cmd_toggle_death_link(self):
+        """Toggle Death Link on/off. Whether Death Link is enabled is stored in your save data, so the client will
+        remember if Death Link was toggled the next time you connect."""
+        ctx = self.ctx
+        if isinstance(ctx, LegoStarWarsTheCompleteSagaContext):
+            if ctx.last_connected_slot is None or not ctx.is_in_game():
+                logger.info("Load into a game and connect first.")
+                return
+            ctx.death_link_manager.toggle_death_link(ctx)
+            if ctx.death_link_manager.death_link_enabled:
+                logger.info("Death Link enabled.")
+            else:
+                logger.info("Death Link disabled.")
 
 
 class LegoStarWarsTheCompleteSagaContext(CommonContext):
@@ -308,13 +313,16 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     game_process: pymem.Pymem | None = None
     #previous_level_id: int = -1
     current_level_id: int = 0  # Title screen
+    current_p_area_data: int = 0  # NULL
     current_cantina_room: CantinaRoom = CantinaRoom.UNKNOWN
+    current_p1_character_id: int | None = None
+    current_p2_character_id: int | None = None
     # Memory in the GOG version is offset 32 bytes after GOG_MEMORY_OFFSET_START.
     # todo: Memory in the retail version is offset ?? bytes after ??.
     _gog_memory_offset: int = 0
     # In the case of an unrecognised version, an overall memory offset may be set.
     _overall_memory_offset: int = 0
-    _cantina_needs_reload_to_fix_characters: bool = False
+    event_manager: EventManager
 
     # Client state.
     acquired_characters: AcquiredCharacters
@@ -324,21 +332,31 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     unlocked_chapter_manager: UnlockedChapterManager
     text_display: InGameTextDisplay
     goal_manager: GoalManager
+    power_up_receiver: PowerUpReceiver
     client_expected_idx: int
 
     # Location checkers.
     free_play_completion_checker: FreePlayChapterCompletionChecker
-    true_jedi_and_minikit_checker: TrueJediAndMinikitChecker
+    true_jedi_and_power_brick_and_minikit_checker: TrueJediAndPowerBrickAndMinikitChecker
     purchased_extras_checker: PurchasedExtrasChecker
     purchased_characters_checker: PurchasedCharactersChecker
     bonus_area_completion_checker: BonusAreaCompletionChecker
+    ridesanity_checker: RidesanityChecker
 
     # Game-state only.
     text_replacer: TextReplacer
+    death_link_manager: DeathLinkManager
+    uncap_high_jump: UncapHighJump
+    cantina_reloader: CantinaReloader
 
     # Customizable client behaviour
-    received_item_messages: bool = True
+    received_item_messages: options.ReceivedItemMessages = options.ReceivedItemMessages(
+        options.ReceivedItemMessages.option_all)
     checked_location_messages: bool = True
+
+    # A few components are permanent and will need to be manually re-subscribed to receive events because the components
+    # won't be re-created.
+    permanent_components: tuple[ClientComponent, ...]
 
     fully_connected: bool
     last_connected_slot: str | None = None
@@ -354,13 +372,16 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.disabled_locations = set()
 
-        self.acquired_extras = AcquiredExtras()
-        self.acquired_characters = AcquiredCharacters()
-        self.acquired_generic = AcquiredGeneric()
-        self.acquired_minikits = AcquiredMinikits()
-        self.goal_manager = GoalManager()
+        # Event manager must be set before other attributes, so that the event manager can look for methods that are
+        # subscribing to events on the other attributes.
+        self.event_manager = EventManager()
 
         self.text_display = InGameTextDisplay()
+        self.uncap_high_jump = UncapHighJump()
+        self.cantina_reloader = CantinaReloader()
+        self.permanent_components = (self.text_display, self.uncap_high_jump, self.cantina_reloader)
+
+        self.death_link_manager = DeathLinkManager()
 
         # It is not ideal to leak `self` in __init__. The TextReplacer methods could be updated to include a TCSContext
         # parameter if needed, instead of leaking `self`. Alternatively, the TextReplacer could be created only when
@@ -369,14 +390,21 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
-        self.true_jedi_and_minikit_checker = TrueJediAndMinikitChecker()
+        self.true_jedi_and_power_brick_and_minikit_checker = TrueJediAndPowerBrickAndMinikitChecker()
         self.purchased_extras_checker = PurchasedExtrasChecker()
         self.purchased_characters_checker = PurchasedCharactersChecker()
         self.bonus_area_completion_checker = BonusAreaCompletionChecker()
+        self.ridesanity_checker = RidesanityChecker()
 
         self.client_expected_idx = 0
 
         self.fully_connected = False
+
+    def __setattr__(self, key, value) -> None:
+        super().__setattr__(key, value)
+        if isinstance(value, ClientComponent):
+            # Subscribe methods that want to receive events.
+            self.event_manager.subscribe_events(value)
 
     def _get_datastorage_key(self, key_prefix: str):
         return key_prefix + DATA_STORAGE_KEY_SUFFIX.format(team=self.team, slot=self.slot)
@@ -394,17 +422,23 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             item = args["item"]
             recipient = args["receiving"]
 
+            is_progression = ItemClassification.progression in ItemClassification(item.flags)
+
             # Receiving an item from the server
             if self.slot_concerns_self(recipient):
                 item_name = self.item_names.lookup_in_game(item.item)
                 if self.slot_concerns_self(item.player):
                     # This counts as both a checked location and a received item.
-                    if self.checked_location_messages or self.received_item_messages:
+                    if (
+                            self.checked_location_messages
+                            or (self.received_item_messages and
+                                (is_progression or self.received_item_messages == "all"))
+                    ):
                         location_name = self.location_names.lookup_in_game(item.location)
                         message = f"Found {item_name} ({location_name})"
                         self.text_display.queue_message(message)
                 else:
-                    if self.received_item_messages:
+                    if self.received_item_messages and (is_progression or self.received_item_messages == "all"):
                         finder = self.player_names[item.player]
                         location_name = self.location_names.lookup_in_slot(item.location, item.player)
                         message = f"Received {item_name} from {finder} ({location_name})"
@@ -478,25 +512,31 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 return True, None
         return True, server_seed_name_hash
 
-    def _read_slot_data(self, slot_data: dict[str, typing.Any]):
+    def _read_slot_data(self, slot_data: dict[str, typing.Any], first_time_setup: bool):
         # The connection to the server is assumed to be OK by this point, so slot_data can now be used to adjust client
         # behaviour.
         received_item_messages = slot_data["received_item_messages"]
-        self.received_item_messages = received_item_messages == options.ReceivedItemMessages.option_all
+
+        on_receive_slot_data_event = OnReceiveSlotDataEvent(self, slot_data, first_time_setup)
+        generator_apworld_version = on_receive_slot_data_event.generator_version
+
+        if generator_apworld_version < (1, 2, 0):
+            # In older versions, "all" was `0` and "none" was `1`. The values have since been swapped.
+            received_item_messages = 1 if received_item_messages == 0 else 0
+
+        self.received_item_messages = options.ReceivedItemMessages(received_item_messages)
 
         checked_location_messages = slot_data["checked_location_messages"]
+
+        if generator_apworld_version < (1, 2, 0):
+            # In older versions, "all" was `0` and "none" was `1`. The values have since been swapped.
+            checked_location_messages = 1 if checked_location_messages == 0 else 0
+
         self.checked_location_messages = checked_location_messages == options.CheckedLocationMessages.option_all
 
-        self.acquired_characters.init_from_slot_data(self, slot_data)
-        self.acquired_extras.init_from_slot_data(self, slot_data)
-        self.acquired_generic.init_from_slot_data(self, slot_data)
-        self.unlocked_chapter_manager.init_from_slot_data(self, slot_data)
-        self.acquired_minikits.init_from_slot_data(self, slot_data)
-        self.text_display.init_from_slot_data(self, slot_data)
+        # Fire the event so that the various client components initialize themselves from the slot_data.
+        self.event_manager.fire_event(on_receive_slot_data_event)
 
-        self.true_jedi_and_minikit_checker.init_from_slot_data(self, slot_data)
-        self.free_play_completion_checker.init_from_slot_data(self, slot_data)
-        self.goal_manager.init_from_slot_data(self, slot_data)
         self.client_expected_idx = 0
 
     def on_package(self, cmd: str, args: dict):
@@ -554,9 +594,12 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             if self.read_slot_name() is None:
                 self.write_slot_name(new_slot)
                 self.ap_first_time_setup()
+                first_time_setup = True
+            else:
+                first_time_setup = False
             self.disabled_locations = set(LOCATION_NAME_TO_ID.values()) - self.server_locations
 
-            self._read_slot_data(slot_data)
+            self._read_slot_data(slot_data, first_time_setup)
 
             # Setting this to non-None indicates to the game watcher loop to start fully running.
             self.last_connected_slot = self.auth
@@ -599,7 +642,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 new_values = set(value)
                 new_values.difference_update(previous_value)
                 if new_values:
-                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                         self, new_true_jedi_area_ids=new_values)
             elif self._is_datastorage_key(key, COMPLETED_10_MINIKITS_KEY_PREFIX):
                 value = args["value"] or ()
@@ -607,7 +650,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 new_values = set(value)
                 new_values.difference_update(previous_value)
                 if new_values:
-                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                         self, new_minikits_gold_brick_area_ids=new_values)
             elif self._is_datastorage_key(key, COMPLETED_BONUSES_KEY_PREFIX):
                 value = args["value"] or ()
@@ -622,7 +665,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 new_values = set(value)
                 new_values.difference_update(previous_value)
                 if new_values:
-                    self.true_jedi_and_minikit_checker.update_from_datastorage(
+                    self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                         self, new_power_brick_area_ids=new_values)
             elif self._is_datastorage_key(key, MINIKIT_GOAL_SUBMITTED_PREFIX):
                 value = args["value"]
@@ -636,22 +679,31 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 self.free_play_completion_checker.update_from_datastorage(self, completed_free_play)
             completed_true_jedi = keys.get(self._get_datastorage_key(COMPLETED_TRUE_JEDI_KEY_PREFIX))
             if completed_true_jedi:
-                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                     self, new_true_jedi_area_ids=completed_true_jedi)
             completed_10_minikits = keys.get(self._get_datastorage_key(COMPLETED_10_MINIKITS_KEY_PREFIX))
             if completed_10_minikits:
-                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                     self, new_minikits_gold_brick_area_ids=completed_10_minikits)
             completed_bonuses = keys.get(self._get_datastorage_key(COMPLETED_BONUSES_KEY_PREFIX))
             if completed_bonuses:
                 self.bonus_area_completion_checker.update_from_datastorage(self, completed_bonuses)
             collected_power_bricks = keys.get(self._get_datastorage_key(COLLECTED_POWER_BRICKS_KEY_PREFIX))
             if collected_power_bricks:
-                self.true_jedi_and_minikit_checker.update_from_datastorage(
+                self.true_jedi_and_power_brick_and_minikit_checker.update_from_datastorage(
                     self, new_power_brick_area_ids=collected_power_bricks)
             completed_minikit_goal = keys.get(self._get_datastorage_key(MINIKIT_GOAL_SUBMITTED_PREFIX))
             if completed_minikit_goal:
                 self.goal_manager.complete_minikit_goal_from_datastorage(self)
+
+    def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
+        text = data.get("cause", "")
+        if text:
+            text = f"DeathLink: {text}"
+        else:
+            text = f"DeathLink: Received from {data['source']}"
+        self.death_link_manager.on_deathlink(self, text)
+        super().on_deathlink(data)
 
     def _update_datastorage_area_ids(self, key_prefix: str, area_ids: list[int], log_name: str):
         if self.server_version < (0, 6, 2):
@@ -698,11 +750,16 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # The client is connecting to a different multiworld or slot to before, so reset all persisted client data.
         self.reset_persisted_client_data()
 
-    def is_location_unchecked(self, location_id: int):
-        """Return whether a location id exists, but has not been checked."""
+    def is_location_unchecked(self, location_id: int) -> bool:
+        """Return whether a location id exists, but has not been checked according to server state."""
         return location_id not in self.checked_locations and location_id not in self.disabled_locations
 
-    def is_location_sendable(self, location_id: int):
+    def is_location_checked(self, location_id: int) -> bool:
+        """Return whether a location id is checked according to server state."""
+        return location_id in self.checked_locations
+
+    def is_location_sendable(self, location_id: int) -> bool:
+        """Return whether a location exists according to server state."""
         return location_id not in self.disabled_locations
 
     def run_gui(self):
@@ -854,6 +911,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     def read_byte(self, address: int, raw=False) -> bytes:
         return self._game_process.read_bytes(address if raw else self._adjust_address(address), 1)
 
+    def read_float(self, address: int, raw=False) -> float:
+        return self._game_process.read_float(address if raw else self._adjust_address(address))
+
     def read_uchar(self, address: int, raw=False) -> int:
         return self._game_process.read_uchar(address if raw else self._adjust_address(address))
         #return self._game_process.read_bytes(address if raw else self._adjust_address(address), 1)[0]
@@ -1002,7 +1062,17 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     def is_connected_to_server(self):
         return self.server is not None and not self.server.socket.closed
 
-    def update_current_level_id(self, new_level_id: int):
+    async def update_current_p_area_data(self):
+        current_p_area_data = self.current_p_area_data
+        new_p_area_data = CURRENT_P_AREA_DATA_ADDRESS.get(self)
+        if new_p_area_data != current_p_area_data:
+            self.current_p_area_data = new_p_area_data
+            await self.event_manager.fire_event_async(OnAreaChangeEvent(self, current_p_area_data, new_p_area_data))
+
+    def update_current_level_id(self, new_level_id: int | None = None):
+        if new_level_id is None:
+            new_level_id = self.read_ushort(CURRENT_LEVEL_ID)
+
         current_level_id = self.current_level_id
         if new_level_id != current_level_id:
             # Update client state.
@@ -1014,7 +1084,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                 "want_reply": False,
                 "operations": [{"operation": "replace", "value": new_level_id}]
             }]))
+            self.event_manager.fire_event(OnLevelChangeEvent(self, current_level_id, new_level_id))
 
+    # todo: A number of uses of this method should just check self.current_level_id instead, or listen to the
+    #  OnLevelChangeEvent.
     def read_current_level_id(self) -> int:
         """
         Read the current level ID from memory.
@@ -1098,6 +1171,11 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             self.write_uint(0x93d850, 1)
 
     def reload_cantina(self, hard: bool = False) -> bool:
+        """
+        Schedule a reload of the Cantina.
+
+        Returns whether the reload could be scheduled.
+        """
         if self.is_in_game() and self.read_current_cantina_room() == CantinaRoom.SHOP_ROOM:
             if self.is_in_shop():
                 # Reloading the cantina while the shop is open gets the camera stuck in the shop, with seemingly no way
@@ -1114,37 +1192,6 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # Character 1 should not be allowed to use a lightsaber.
         # Custom Characters always have access to blasters, so give Custom Character 1 a Red Blaster.
         self.write_byte(CUSTOM_CHARACTER_1_WEAPON, 4)
-
-    @staticmethod
-    def _get_valid_replacement_characters(unlocked_characters: set[int], needed_count: int) -> list[int]:
-        """
-        Get 2 valid replacement characters, or a single 'Glup' replacement character if there are no valid replacement
-        characters.
-        """
-        # Prioritise good characters.
-        replacements = []
-        needed_remaining = needed_count
-
-        # Pick from unlocked characters, except Custom Characters, who are not allowed in the Cantina because that is
-        # where they are edited.
-        not_allowed = {
-            CHARACTERS_AND_VEHICLES_BY_NAME["STRANGER 1"].character_index,
-            CHARACTERS_AND_VEHICLES_BY_NAME["STRANGER 2"].character_index,
-        }
-        allowed_character_indices = unlocked_characters - not_allowed
-        allowed_character_indices.intersection_update(AP_NON_VEHICLE_CHARACTER_INDICES)
-
-        to_pick_from = sorted(allowed_character_indices)
-        picks = random.sample(to_pick_from, min(needed_remaining, len(to_pick_from)))
-        replacements.extend(picks)
-        needed_remaining -= len(picks)
-
-        if needed_remaining == 0:
-            return replacements
-        else:
-            # Fill remaining spots with the "Skeleton" "Extra Toggle" character.
-            replacements.extend([CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index] * needed_remaining)
-            return replacements
 
     def _get_player_character_addr(self, player: int) -> int:
         # Note: The returned address from this function is not static for the current game instance. Whenever P1 swaps
@@ -1184,62 +1231,19 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     def _get_player_character_id(self, player: int) -> int | None:
         return self._get_character_id(self._get_character_data_address(self._get_player_character_addr(player)))
 
-    async def reload_cantina_if_invalid_characters(self):
-        unlocked_characters = self.acquired_characters.unlocked_characters
-
-        if not unlocked_characters:
-            # If connected, there should always be at least 1 character unlocked, even if it is a vehicle character.
-            return
-
-        if (
-                self.is_in_game()
-                and self.read_current_level_id() == LEVEL_ID_CANTINA
-                and GameState1.PLAYING_OR_TRAILER_OR_CANTINA_LOAD_OR_CHAPTER_TITLE_CRAWL.is_set(self)
-                and self.read_uchar(OPENED_MENU_DEPTH_ADDRESS) == 0
-        ):
-            if self._cantina_needs_reload_to_fix_characters:
-                if self.reload_cantina(hard=True):
-                    await asyncio.sleep(1.0)
-                    self._cantina_needs_reload_to_fix_characters = False
-                return
-            # Skeleton is the backup character the client forces when the player does not have at least 2 unlocked
-            # non-vehicle characters.
-            skeleton_character_index = CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index
-            needed_replacements = 0
-            p1_character_id = self._get_player_character_id(1)
-            if (p1_character_id is not None
-                    and p1_character_id != skeleton_character_index
-                    and p1_character_id not in unlocked_characters):
-                needed_replacements += 1
-                replace_p1 = True
-                debug_logger.info("P1 is character ID %i in the Cantina, which is not unlocked. Picking a replacement"
-                                  " character and reloading the Cantina.", p1_character_id)
-            else:
-                replace_p1 = False
-            p2_character_id = self._get_player_character_id(2)
-            if (p2_character_id is not None
-                    and p2_character_id != skeleton_character_index
-                    and p2_character_id not in unlocked_characters):
-                needed_replacements += 1
-                replace_p2 = True
-                debug_logger.info("P2 is character ID %i in the Cantina, which is not unlocked. Picking a replacement"
-                                  " character and reloading the Cantina.", p2_character_id)
-            else:
-                replace_p2 = False
-            if needed_replacements == 0:
-                # Both characters are unlocked or are already Skeleton, so there is nothing to do.
-                return
-            replacements = self._get_valid_replacement_characters(unlocked_characters, needed_replacements)
-            if replace_p1:
-                self.write_uint(P1_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID, replacements.pop(0))
-            if replace_p2:
-                self.write_uint(P2_CANTINA_FREE_PLAY_SELECTION_CHARACTER_ID, replacements.pop(0))
-
-            if self.reload_cantina(hard=True):
-                await asyncio.sleep(1.0)
-            else:
-                # If the reload failed (e.g. the player is in the shop or the game is paused), try again.
-                self._cantina_needs_reload_to_fix_characters = True
+    async def update_player_characters(self):
+        p1_character_id = self._get_player_character_id(1)
+        p2_character_id = self._get_player_character_id(2)
+        if p1_character_id != self.current_p1_character_id or p2_character_id != self.current_p2_character_id:
+            await self.event_manager.fire_event_async(OnPlayerCharacterIdChangeEvent(
+                self,
+                self.current_p1_character_id,
+                self.current_p2_character_id,
+                p1_character_id,
+                p2_character_id,
+            ))
+            self.current_p1_character_id = p1_character_id
+            self.current_p2_character_id = p2_character_id
 
     def set_game_expected_idx(self, idx: int) -> None:
         # The expected idx is stored in the unused 4 bytes at the end of Negotiations' (1-1's) save data.
@@ -1264,7 +1268,13 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             # is currently in-game.
             if not self.is_in_game():
                 return False
-            give_studs(self, code)
+            give_studs_item(self, code)
+        elif code in self.power_up_receiver.receivable_ap_ids:
+            # Power Ups are directly given to the player as they are received, with a buffer of extra Power Ups kept
+            # only in the current client session.
+            if not self.is_in_game():
+                return False
+            self.power_up_receiver.give_power_up()
         else:
             self.receive_item(code)
         return True
@@ -1279,10 +1289,10 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             self.acquired_minikits.receive_minikit(self, code)
         elif code in self.acquired_characters.receivable_ap_ids:
             self.acquired_characters.receive_character(code)
-            self.unlocked_chapter_manager.on_character_or_episode_unlocked(code)
+            self.unlocked_chapter_manager.on_character_or_episode_unlocked(self, code)
         elif code in self.acquired_extras.receivable_ap_ids:
             self.acquired_extras.receive_extra(code)
-        elif code in STUDS_AP_ID_TO_VALUE:
+        elif code in STUDS_AP_ID_TO_VALUE or code in self.power_up_receiver.receivable_ap_ids:
             # The client may be resetting its state after a save data rollback or after connecting to an existing seed.
             pass
         else:
@@ -1296,6 +1306,13 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         """
         self.finished_game = False
         self.locations_checked.clear()
+        # Event manager must be set before other attributes, so that the event manager can look for methods that are
+        # subscribing to events on the other attributes.
+        self.event_manager = EventManager()
+        # Some of the components are permanent, so need to be manually subscribed to the new EventManager.
+        for client_component in self.permanent_components:
+            self.event_manager.subscribe_events(client_component)
+
         self.acquired_extras = AcquiredExtras()
         self.acquired_characters = AcquiredCharacters()
         self.acquired_generic = AcquiredGeneric()
@@ -1304,18 +1321,23 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.unlocked_chapter_manager = UnlockedChapterManager()
         self.client_expected_idx = 0
         self.current_level_id = 0
+        self.current_p_area_data = 0
         self.current_cantina_room = CantinaRoom.UNKNOWN
 
         self.free_play_completion_checker = FreePlayChapterCompletionChecker()
-        self.true_jedi_and_minikit_checker = TrueJediAndMinikitChecker()
+        self.true_jedi_and_power_brick_and_minikit_checker = TrueJediAndPowerBrickAndMinikitChecker()
         self.purchased_extras_checker = PurchasedExtrasChecker()
         self.purchased_characters_checker = PurchasedCharactersChecker()
         self.bonus_area_completion_checker = BonusAreaCompletionChecker()
+        self.ridesanity_checker = RidesanityChecker()
 
         self.goal_manager = GoalManager()
+        self.power_up_receiver = PowerUpReceiver()
 
         if clear_text_display_queue:
             self.text_display.message_queue.clear()
+
+        self.death_link_manager = DeathLinkManager()
 
     def reset_client_received_items(self):
         """
@@ -1327,6 +1349,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         self.acquired_characters.clear_received_items()
         self.acquired_generic.clear_received_items()
         self.acquired_minikits.clear_received_items()
+        self.power_up_receiver.clear_received_items()
 
         self.client_expected_idx = 0
 
@@ -1482,6 +1505,7 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
             last_message = msg
 
     sleep_time = 0.0
+    in_game_watcher_tick_count = 0
     while not ctx.exit_event.is_set():
         if sleep_time > 0.0:
             try:
@@ -1504,6 +1528,7 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     pass
             else:
                 if not ctx.is_in_game():
+                    in_game_watcher_tick_count = 0
                     previously_not_in_game = True
                     # Need to wait for the player to load into a save file.
                     if (ctx.last_loaded_save_file is not None
@@ -1551,18 +1576,21 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                 # coroutines to allow the player to play while disconnected.
                 # todo: Is the `is_in_game()` check here still necessary now that there is an earlier check?
                 if ctx.is_in_game():
-                    await ctx.text_replacer.update_game_state(ctx)
+                    # Ensure that the OnLevelChangeEvent gets fired consistently, by updating the current level ID on
+                    # each game watcher tick.
+                    ctx.update_current_level_id()
+
                     await ctx.free_play_completion_checker.initialize(ctx)
                     await give_items(ctx)
 
-                    # Update game state for received items.
-                    await ctx.reload_cantina_if_invalid_characters()
-                    await ctx.acquired_characters.update_game_state(ctx)
-                    await ctx.acquired_extras.update_game_state(ctx)
-                    await ctx.acquired_generic.update_game_state(ctx)
-                    await ctx.acquired_minikits.update_game_state(ctx)
-                    await ctx.unlocked_chapter_manager.update_game_state(ctx)
-                    await ctx.text_display.update_game_state(ctx)
+                    # Check for changes to the current AreaData pointer, firing an event if it changes.
+                    await ctx.update_current_p_area_data()
+
+                    # todo: Firing this event should just be fired by something (ctx?) listening to the Tick event.
+                    # Fire OnPlayerCharacterIdChangeEvent if player characters have changed.
+                    await ctx.update_player_characters()
+                    # Fire Tick event for all ClientComponents subscribed to the event.
+                    await ctx.event_manager.fire_event_async(OnGameWatcherTickEvent(ctx, in_game_watcher_tick_count))
 
                     # Only queue the message if everything else worked so far.
                     msg = "The client is now fully connected to the game, receiving items and checking locations."
@@ -1584,29 +1612,42 @@ async def game_watcher(ctx: LegoStarWarsTheCompleteSagaContext):
                     #  file.
                     if ctx.slot:
                         new_location_checks: list[int] = []
-                        # todo: Free play completion needs to be checked often (need to ensure that players cannot click
-                        #  through the status screen faster than we're polling the game to check for free play!)
+                        # Free play completion needs to be checked often (need to ensure that players cannot click
+                        # through the status screen faster than we're polling the game to check for free play!)
                         await ctx.free_play_completion_checker.check_completion(ctx, new_location_checks)
-                        # todo: True Jedi and Minikit counts (deprecated) in the save data do not need to be checked
-                        #  often, but the in-level True Jedi and Minikit counts (deprecated) do need to be check often.
-                        await ctx.true_jedi_and_minikit_checker.check_true_jedi_and_minikits(ctx, new_location_checks)
-                        # todo: Purchases do not need to be checked often.
-                        await ctx.purchased_extras_checker.check_extra_purchases(ctx, new_location_checks)
-                        await ctx.purchased_characters_checker.check_extra_purchases(ctx, new_location_checks)
-                        # todo: Bonus level completion is read from the save data, so does not need to be read often.
-                        await ctx.bonus_area_completion_checker.check_completion(ctx, new_location_checks)
+
+                        # True Jedi and Minikit counts (deprecated) in the save data do not need to be checked often,
+                        # but the in-level True Jedi and Minikit counts (deprecated) do need to be checked often.
+                        if in_game_watcher_tick_count % 20 == 0:
+                            await ctx.true_jedi_and_power_brick_and_minikit_checker.check_save_data(
+                                ctx, new_location_checks)
+                        await ctx.true_jedi_and_power_brick_and_minikit_checker.check_current_area(
+                            ctx, new_location_checks)
+
+                        # Purchases do not need to be checked often.
+                        if in_game_watcher_tick_count % 10 == 0:
+                            await ctx.purchased_extras_checker.check_extra_purchases(ctx, new_location_checks)
+                            await ctx.purchased_characters_checker.check_extra_purchases(ctx, new_location_checks)
+
+                        # Bonus level completion is read from the save data, so does not need to be checked often.
+                        if in_game_watcher_tick_count % 20 == 0:
+                            await ctx.bonus_area_completion_checker.check_completion(ctx, new_location_checks)
+
+                        # New Ridesanity checks are prepared to be sent by other event callbacks, so Ridesanity is cheap
+                        # to check for new locations.
+                        await ctx.ridesanity_checker.check_ridesanity(ctx, new_location_checks)
 
                         # Send newly cleared locations to the server, if there are any.
                         actually_new_location_checks = await ctx.check_locations(new_location_checks)
                         ctx.locations_checked.update(actually_new_location_checks)
-
-                        await ctx.goal_manager.update_game_state(ctx)
 
                         # Check for goal completion.
                         if not ctx.finished_game:
                             if ctx.goal_manager.is_goal_complete(ctx):
                                 await ctx.send_msgs([{"cmd": "StatusUpdate", "status": ClientStatus.CLIENT_GOAL}])
                                 ctx.finished_game = True
+
+                    in_game_watcher_tick_count += 1
                 sleep_time = 0.1
         except Exception as e:
             await ctx.unhook_game_process()

@@ -20,7 +20,7 @@ Characters, Extras (that require a Power Brick) and Minikits are in the item poo
 Score Multiplier Extras are replaced with Progressive Score Multiplier items that unlock more Score Multiplier Extras
 the more Progressive Score Multipliers are acquired.
 
-Purple Stud items are added to the item pool to fill out the rest of the item pool.
+Purple Stud and Power Up items are added to the item pool to fill out the rest of the item pool.
 
 ### Locations
 
@@ -30,9 +30,9 @@ The Extras that can be purchased without collecting a Power Brick are not curren
 Completing an Episode Chapter in Free Play is a location to check. Additional checks can be sent for each Story mode
 character that would have been unlocked if the Chapter had been completed in Story mode.
 
-Completing the True Jedi for a Chapter is a location to check.
+Completing the True Jedi for a Chapter can be a location to check.
 
-Every 1-10 number of Minikits collected in a Chapter is a check.
+Every 1-10 number of Minikits collected in a Chapter can be a check.
 
 Completing Bonus levels and watching the Indiana Jones trailer can be locations to check.
 
@@ -41,7 +41,7 @@ Completing Bonus levels and watching the Indiana Jones trailer can be locations 
 Purchases in the Characters shop and Extras shop will not award their vanilla Characters/Extras.
 
 Slots in the Characters shop that would normally unlock upon completing Story mode in every Chapter have been changed to
-either unlock once all enabled Episodes are unlocked, or once a number of 'All Episodes Token' items have been received.
+either unlock once all enabled Episodes are unlocked, or once 6 'Episode Completion Token' items have been received.
 The unlock condition is controlled by an option in the game yaml.
 
 ## What does another world's item look like in Lego Star Wars: The Complete Saga?
@@ -53,9 +53,10 @@ All items display as they would in vanilla.
 The item is immediately added to your unlocked Extras/Characters/Stud count. A text display in-game may show what the
 received item was.
 
-Studs are added to your total accumulated Studs rather than your in-level Studs, so the effect of receiving Studs is
-not noticeable without returning to the Cantina. The received studs are multiplied by your maximum possible score
-multiplier.
+Studs are added to your in-level studs if you are a Chapter in Free Play, otherwise the sutds are added directly to your
+save file's total accumulated Studs. The received studs are multiplied by your maximum possible score multiplier and
+multiplied by a further 2x for characters with a Power Up active (double score zones do not affect received studs
+currently).
 
 ## Can I play offline?
 
@@ -68,21 +69,17 @@ locations while disconnected will be sent once the connection is reestablished.
 
 ### Logic
 
-The logic is quite basic and may have issues. Work is ongoing to rewrite the logic to fix issues and enable more
-randomization options, such as individual Minikit logic and different unlock requirements for Chapters.
+The logic is quite basic and may be overly restrictive (you can get a lot of Minikit checks out-of-logic). Work is
+ongoing to rewrite the logic to fix issues and enable more randomization options, such as individual Minikit logic and
+different unlock requirements for Chapters.
 
 ### Cantina Episode door lights
 
-If you are in the main room of the Cantina when you unlock your first Chapter in an episode, the red lights above the
-episode door won't change to green, but the door can still be entered normally. The lights will become green the next
+If you are in the main room of the Cantina when you unlock your first Chapter in an Episode, the red lights above the
+Episode door won't change to green, but the door can still be entered normally. The lights will become green the next
 time you enter the main room of the Cantina.
 
 This will happen whenever your starting Chapter is from any Episode other than Episode 1.
-
-#### Episode 1 door in new save files
-
-When starting a new save file and connecting to the Archipelago server, the door to Episode 1 will start, and remain
-unlocked until you re-enter the main room of the Cantina.
 
 ### Starting Characters
 
@@ -92,10 +89,6 @@ starting characters do not include a Jedi and a Protocol Droid, a Jedi and/or a 
 added to the starting characters.
 
 ### Player 2 picking locked characters
-
-When loading a save file for the first time, it is possible for Player 2 to load in as Obi-Wan Kenobi or swap to Qui-Gon
-Jinn, even if those characters should be locked. Upon entering a Chapter in Free Play, Player 2 will continue using that
-character despite the character being locked.
 
 When entering a Chapter in Free Play with only one Character unlocked for that level type (vehicle/non-vehicle), Player
 2 will pick a locked Character.
@@ -126,15 +119,16 @@ disable that character to allow the purchase to go through.
 
 ### Purple Studs
 
-Receiving a Purple Stud item adds the studs directly to your save data, the stud counter that is visible in the Cantina.
+When in the Cantina, receiving a Purple Stud item adds the studs directly to your save data, the stud counter shared by
+both players that is only visible while in the Cantina.
 
-Receiving a Purple Stud while in a level will not add it to your in-level stud count or contribute to True Jedi
-progress.
+Receiving a Purple Stud while in a level will add it to your in-level stud count, contributing to True Jedi progress.
 
-Receiving a Purple Stud while under the effect of a Power Up, or while in a Double Score Zone will not double the
-received studs.
+Receiving a Purple Stud while under the effect of a Power Up will double the received studs.
+However, receiving a Purple Stud while in a Double Score Zone will not currently double the received studs.
 
 ## Credits
 
 - maybejess: manual apworld reference
 - Roushmore: manual apworld reference
+- [Flit](https://flitpix.net): Linux setup guide

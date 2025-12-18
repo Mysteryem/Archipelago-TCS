@@ -2,15 +2,9 @@ import abc
 from typing import Container
 
 from ..common import ClientComponent
-from ..type_aliases import TCSContext
 
 
-class GameStateUpdater(ClientComponent):
-    @abc.abstractmethod
-    async def update_game_state(self, ctx: TCSContext) -> None: ...
-
-
-class ItemReceiver(GameStateUpdater):
+class ItemReceiver(ClientComponent):
     @property
     @abc.abstractmethod
     def receivable_ap_ids(self) -> Container[int]:

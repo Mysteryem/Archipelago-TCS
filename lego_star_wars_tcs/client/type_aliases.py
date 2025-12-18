@@ -19,6 +19,7 @@ BitMask = int
 # Internal TCS IDs
 LevelId = int
 AreaId = int
+CharacterId = int
 
 # Archipelago.
 ApLocationId = int

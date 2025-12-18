@@ -1,6 +1,7 @@
 import logging
-from typing import Mapping, Any
+from typing import Mapping
 
+from ..events import subscribe_event, OnReceiveSlotDataEvent
 from ..type_aliases import TCSContext
 from ...items import MINIKITS_BY_COUNT
 from . import ItemReceiver
@@ -18,7 +19,8 @@ class AcquiredMinikits(ItemReceiver):
     def __init__(self):
         self.minikit_count = 0
 
-    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
+    @subscribe_event
+    def init_from_slot_data(self, _event: OnReceiveSlotDataEvent) -> None:
         self.clear_received_items()
 
     def clear_received_items(self) -> None:
@@ -31,6 +33,3 @@ class AcquiredMinikits(ItemReceiver):
             ctx.goal_manager.tag_for_update("minikit")
         else:
             logger.error("Unhandled ap_item_id %s for generic item", ap_item_id)
-
-    async def update_game_state(self, ctx: TCSContext):
-        pass

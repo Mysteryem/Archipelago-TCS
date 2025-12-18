@@ -12,11 +12,14 @@ from Options import (
     DefaultOnToggle,
     Toggle,
     OptionGroup,
+    DeathLink,
+    ItemDict,
 )
 
-from .levels import BOSS_UNIQUE_NAME_TO_CHAPTER
+from .levels import BOSS_UNIQUE_NAME_TO_CHAPTER, VEHICLE_CHAPTER_SHORTNAMES, EPISODE_TO_CHAPTER_AREAS
 from .locations import LEVEL_SHORT_NAMES_SET
 from .items import CHARACTERS_AND_VEHICLES_BY_NAME, EXTRAS_BY_NAME
+from .item_groups import ITEM_GROUPS
 
 
 CHAPTER_OPTION_KEYS: Mapping[str, AbstractSet[str]] = {
@@ -50,22 +53,68 @@ class ChoiceFromStringExtension(Choice):
         raise ValueError(f"{s} is not a valid string for {type(self)}. Expected: {sorted(self.name_lookup.values())}")
 
 
+class ChapterChoice(ChoiceFromStringExtension):
+    """ChoiceFromStringExtension for picking Chapters"""
+    # Variable names cannot use hyphens, so the options for specific levels are set programmatically.
+    # option_1-1 = 11
+    # option_1-2 = 12
+    # etc.
+    locals().update({f"option_{episode}-{chapter}": int(f"{episode}{chapter}")
+                     for episode, chapter in itertools.product(range(1, 7), range(1, 7))})
+    option_random_chapter = -1
+    option_random_non_vehicle = -2
+    option_random_vehicle = -3
+    option_random_episode_1 = 1
+    option_random_episode_2 = 2
+    option_random_episode_3 = 3
+    option_random_episode_4 = 4
+    option_random_episode_5 = 5
+    option_random_episode_6 = 6
+
+    def is_singular_chapter(self) -> bool:
+        v = self.value
+        return 11 <= v <= 66 and 1 <= v // 10 <= 6 and 1 <= v % 10 <= 6
+
+    def to_short_name_set(self) -> set[str]:
+        v = self.value
+        if v == ChapterChoice.option_random_chapter:
+            return set(LEVEL_SHORT_NAMES_SET)
+        elif v == ChapterChoice.option_random_non_vehicle:
+            return set(LEVEL_SHORT_NAMES_SET).difference(VEHICLE_CHAPTER_SHORTNAMES)
+        elif v == ChapterChoice.option_random_vehicle:
+            return set(VEHICLE_CHAPTER_SHORTNAMES)
+        elif 1 <= v <= 6:
+            return {chapter.short_name for chapter in EPISODE_TO_CHAPTER_AREAS[v]}
+        else:
+            key = self.current_key
+            assert key in LEVEL_SHORT_NAMES_SET, f"{key} is not a valid chapter shortname"
+            return {key}
+
+
 class MinikitGoalAmount(NamedRange):
     """
-    The number of Minikits required to goal.
+    Require that a number of Minikits must be acquired as part of your goal.
+
+    Once the required number of Minikit items have been received/collected, the Minikit goal is completed by interacting
+    with the Minikits display in the outside junkyard area of the Cantina.
+
+    The number of Minikits required to goal is shown in the Hints shop in the Cantina.
+
+    Current progress towards the goal can be seen on the Pause screen.
 
     If set to zero, Minikits will not be part of the goal, but will still be in the item pool as filler items if Minikit
     locations are enabled.
 
-    If set to non-zero, and Minikit locations are disabled, the Minikit Bundle Size will be forcefully set to 10.
+    If set to non-zero, and Minikit locations are disabled, the *Minikit Bundle Size* will be forcefully set to 10.
 
     Each enabled episode chapter shuffles 10 Minikits into the item pool, which may be bundled to reduce the number
     Minikit items in the item pool.
 
-    Setting this option to "use_percentage_option" will use the Minikit Goal Amount Percentage option's value to
+    Setting this option to *Use Percentage Option* will use the *Minikit Goal Amount Percentage* option's value to
     determine how many Minikit's are required to goal.
     """
-    display_name = "Goal Minikit Count"
+    display_name = "Minikit Goal Amount"
+    rich_text_doc = True
     range_start = 0
     range_end = 360
     special_range_names = {
@@ -76,19 +125,137 @@ class MinikitGoalAmount(NamedRange):
 
 class MinikitGoalAmountPercentage(Range):
     """
-    The percentage of Minikits in the item pool that are required to goal.
+    The percentage of Minikits in the item pool that must be acquired as part of your goal.
 
     10 Minikits are added to the item pool for each enabled episode chapter, which may be bundled to reduce the number
     of individual items.
 
-    This does nothing unless the Minikit Goal Amount option is set to "use_percentage_option" instead of a number.
+    This does nothing unless the *Minikit Goal Amount* option is set to *Use Percentage Option* instead of a number.
 
     The final number of Minikits required to goal is rounded to the nearest integer, but will always be at least 1.
     """
-    display_name = "Goal Minikit Percentage"
+    display_name = "Minikit Goal Amount Percentage"
+    rich_text_doc = True
     range_start = 1
     range_end = 100
     default = 75
+
+
+class MinikitGoalCompletionMethod(ChoiceFromStringExtension):
+    """
+    Choose how the Minikit Goal is completed.
+
+    - Instant: The Minikit Goal is completed as soon as you have enough Minikit items to meet your goal. It is
+    recommended to enable a Goal Chapter when the Minikit Goal Completion Method is set to Instant.
+    - Junkyard Minikit Display: Once you have enough Minikit items to meet your goal, the goal must be completed by
+    using the Minikit Display in the outside Junkyard area of the Cantina.
+    """
+    display_name = "Minikit Goal Completion Method"
+    rich_text_doc = True
+    option_instant = 1
+    option_junkyard_minikit_display = 2
+    default = 2
+
+
+# "Level" used here is as a user-facing term. The correct internal name is "Area". Internally, a "Level" refers to a
+# separately loaded section of an "Area".
+class CompleteLevelsGoalAmountPercentage(Range):
+    """
+    Require that a percentage of enabled Chapters and Gold Brick Door Bonuses (if Bonuses are enabled) must be completed
+    as part of your goal.
+
+    The final number of levels that must be completed to goal is rounded to the nearest integer, but will always be at
+    least 1 if the percentage is greater than 0.
+    """
+    display_name = "Goal Level Completion Percentage"
+    rich_text_doc = True
+    range_start = 0
+    range_end = 100
+    default = 0
+
+
+class GoalRequiresKyberBricks(Toggle):
+    """
+    Require that 7 Kyber Brick items must be acquired as part of your goal.
+
+    The 7 Kyber Brick items only contribute to your goal and do nothing else. There are only 7 added to the item pool
+    when this option is enabled.
+
+    It is recommended to enable a Goal Chapter when the Kyber Bricks Goal is enabled.
+    """
+    display_name = "Goal Requires 7 Kyber Bricks"
+    rich_text_doc = True
+
+
+class KyberBrickGoalCompletionMethod(ChoiceFromStringExtension):
+    """
+    Set how the Kyber Brick part of the Goal is completed.
+
+    - Instant: The Kyber Brick goal is completed as soon as 7 Kyber Brick items are acquired. It is recommended to
+    enable a Goal Chapter when the Kyber Brick Goal Completion Method is set to Instant.
+    """
+    display_name = "Kyber Brick Goal Completion Method"
+    rich_text_doc = True
+    option_instant = 1
+    default = 1
+
+
+class GoalChapterLocationsMode(ChoiceFromStringExtension):
+    """
+    Choose how locations within the Goal Chapter are generated.
+
+    - Removed: Locations within the Goal Chapter are removed from the multiworld. Gold Bricks from the Goal Chapter will
+    not be included in Gold Brick logic.
+    - Excluded: Locations within the Goal Chapter are marked as Excluded, disallowing Progression and Useful items being
+    placed there. Gold Bricks from the Goal Chapter will not be included in Gold Brick logic.
+    - Normal: No changes will be made to the locations in the Goal Chapter, or to Gold Brick logic. Not recommended
+    unless playing without ``!release`` after goaling.
+    """
+    display_name = "Goal Chapter Locations Mode"
+    rich_text_doc = True
+    option_removed = 1
+    option_excluded = 2
+    option_normal = 3
+    default = 1
+
+
+class GoalChapter(ChoiceFromStringExtension):
+    """Choose a Goal Chapter that must be completed as the final part of your goal.
+
+    All other enabled goals must be completed to unlock the Goal Chapter, in addition to the Goal Chapter's usual
+    requirements.
+
+    The Goal Chapter, when enabled, is picked separately from regular Chapters, ignoring the Allowed Chapters option
+    used when picking regular Chapters.
+
+    The Goal Chapter is enabled in addition to your Enabled Chapter Count, when possible.
+
+    The Goal Chapter does not add any Minikit items to the item pool, even when it contains Minikit locations.
+
+    If this option is enabled and part of the goal requires defeating bosses, the Goal Chapter will never have an
+    enabled boss, potentially reducing the maximum number of bosses.
+
+    If this option is enabled and part of the goal requires completing levels, the maximum possible number of required
+    levels to be completed to goal won't include the Goal Chapter.
+
+    """
+    display_name = "Goal Chapter"
+    rich_text_doc = True
+    option_no_goal_chapter = 0
+    # Variable names cannot use hyphens, so the options for specific levels are set programmatically.
+    # option_1-1 = 11
+    # option_1-2 = 12
+    # etc.
+    locals().update({f"option_{episode}-{chapter}": int(f"{episode}{chapter}")
+                     for episode, chapter in itertools.product(range(1, 7), range(1, 7))})
+    default = 0
+
+    def to_short_name(self) -> str | None:
+        if self.value == GoalChapter.option_no_goal_chapter:
+            return None
+        key = self.current_key
+        assert key in LEVEL_SHORT_NAMES_SET, f"{key} is not a valid chapter shortname"
+        return key
 
 
 class DefeatBossesGoalAmount(Range):
@@ -98,20 +265,31 @@ class DefeatBossesGoalAmount(Range):
     If set to zero, bosses will not be part of the goal.
 
     The Chapter a boss is in must be completed for defeating the boss to count.
+
+    The bosses that count towards your goal are shown in the Hints shop in the Cantina.
+
+    Current progress towards the goal can be seen on the Pause screen. Individual progress within an Episode can be seen
+    by standing in front of the door to that Episode once the door is unlocked.
     """
     display_name = "Defeat Bosses Goal Amount"
+    rich_text_doc = True
     range_start = 0
     range_end = len(BOSS_UNIQUE_NAME_TO_CHAPTER)
 
 
 class EnabledBossesCount(Range):
     """
-    Choose the number of bosses that will be present in the world.
+    Choose the number of bosses that will be present in the world and count towards your goal.
+
+    More chapters containing bosses than this count can end up in the generated world. If this happens, some of them
+    will not count towards the goal.
 
     This will automatically be set at least as high as the number of bosses required to goal.
+
     This will automatically be set no higher than the maximum of the number of allowed bosses in allowed Chapters.
     """
     display_name = "Enabled Bosses Count"
+    rich_text_doc = True
     range_start = 0
     range_end = len(BOSS_UNIQUE_NAME_TO_CHAPTER)
 
@@ -124,24 +302,27 @@ class AllowedBosses(OptionSet):
     Chapters list if they are not already in Allowed Chapters list.
 
     allowed_bosses:
-      - Darth Maul (1-6) # Darth Maul
-      - Zam Wesell (2-1) # Bounty Hunter Pursuit
-      - Jango Fett (2-2) # Discovery On Kamino
-      - Jango Fett (2-4) # Jedi Battle
-      - Count Dooku (2-6) # Count Dooku
-      - Count Dooku (3-2) # Chancellor In Peril
-      - General Grievous (3-3) # General Grievous
-      - Anakin Skywalker (3-6) # Darth Vader
-      - Death Star (4-6) # Rebel Attack
-      - Darth Vader (5-4) # Dagobah
-      - Darth Vader (5-5) # Cloud City Trap
-      - Boba Fett (5-6) # Betrayal Over Bespin
-      - Rancor (6-1) # Jabba's Palace
-      - Boba Fett (6-2) # The Great Pit Of Carkoon
-      - Darth Sidious (6-5) # Jedi Destiny
-      - Death Star II (6-6) # Into The Death Star
+
+    - Darth Maul (1-6) # Darth Maul
+    - Zam Wesell (2-1) # Bounty Hunter Pursuit
+    - Jango Fett (2-2) # Discovery On Kamino
+    - Jango Fett (2-4) # Jedi Battle
+    - Count Dooku (2-6) # Count Dooku
+    - Count Dooku (3-2) # Chancellor In Peril
+    - General Grievous (3-3) # General Grievous
+    - Anakin Skywalker (3-6) # Darth Vader
+    - Imperial Spy (4-3) # Mos Eisley Spaceport
+    - Death Star (4-6) # Rebel Attack
+    - Darth Vader (5-4) # Dagobah
+    - Darth Vader (5-5) # Cloud City Trap
+    - Boba Fett (5-6) # Betrayal Over Bespin
+    - Rancor (6-1) # Jabba's Palace
+    - Boba Fett (6-2) # The Great Pit Of Carkoon
+    - Darth Sidious (6-5) # Jedi Destiny
+    - Death Star II (6-6) # Into The Death Star
     """
     display_name = "Allowed Bosses"
+    rich_text_doc = True
     valid_keys = list(BOSS_UNIQUE_NAME_TO_CHAPTER.keys())
     default = list(BOSS_UNIQUE_NAME_TO_CHAPTER.keys())
 
@@ -151,10 +332,11 @@ class OnlyUniqueBossesCountTowardsGoal(ChoiceFromStringExtension):
     When enabled, only unique bosses will count towards your goal. Defeating the same boss character in two separate
     Chapters will only count as one boss kill.
 
-    When unique bosses are enabled, the maximum number of bosses that can count towards the goal will be reduced to 12,
-    or 11 when Anakin Skywalker counts as the same boss as Darth Vader.
+    When unique bosses are enabled, the maximum number of bosses that can count towards the goal will be reduced to 13,
+    or 12 when Anakin Skywalker counts as the same boss as Darth Vader.
     """
     display_name = "Only Count Unique Bosses"
+    rich_text_doc = True
     option_disabled = 0
     option_enabled = 1
     option_enabled_and_count_anakin_as_vader = 2
@@ -171,6 +353,7 @@ class MinikitBundleSize(ChoiceFromStringExtension):
     Low bundle sizes also mean fewer filler items in the item pool.
     """
     display_name = "Minikit Bundle Size"
+    rich_text_doc = True
     option_individual = 1
     alias_1 = 1
     option_2 = 2
@@ -185,6 +368,7 @@ class EnabledChaptersCount(Range):
     If there are fewer allowed chapters than the count to enable, all the allowed chapters will be enabled.
     """
     display_name = "Enabled Chapter Count"
+    rich_text_doc = True
     range_start = 1
     range_end = 36
     default = 18
@@ -197,6 +381,7 @@ class AllowedChapterTypes(ChoiceFromStringExtension):
     - No Vehicles: No vehicle chapters (1-4, 2-1, 2-5, 3-1, 4-6, 5-1, 5-3, 6-6) will be allowed.
     """
     display_name = "Allowed Chapter Types"
+    rich_text_doc = True
     option_all = 0
     option_no_vehicles = 1
     default = 0
@@ -208,46 +393,49 @@ class AllowedChapters(ChapterOptionSet):
     Individual chapters can be specified, e.g. "1-1", "5-4".
 
     Special values:
+
     - "All": All chapters will be allowed.
     - "Prequel Trilogy": All chapters in episodes 1, 2 and 3 will be allowed.
     - "Original Trilogy": All chapters in episode 4, 5 and 6 will be allowed.
     - "Episode {number}": e.g. "Episode 3" will allow all chapters in Episode 3, so 3-1 through to 3-6.
 
-    Examples:
-    # Enable only 1-1 (Negotiations)
-    allowed_chapters: ["1-1"]
+    Examples::
 
-    # Enable only 1-1 (Negotiations) (alt.)
-    allowed_chapters:
-      - 1-1
+        # Enable only 1-1 (Negotiations)
+        allowed_chapters: ["1-1"]
 
-    # Enable all
-    allowed_chapters: ["All"]
+        # Enable only 1-1 (Negotiations) (alt.)
+        allowed_chapters:
+          - 1-1
 
-    # Enable all (alt.)
-    allowed_chapters:
-      - All
+        # Enable all
+        allowed_chapters: ["All"]
 
-    # Enable only vehicle levels
-    allowed_chapters:
-      - 1-4
-      - 2-2
-      - 2-5
-      - 3-1
-      - 4-6
-      - 5-1
-      - 5-3
-      - 6-6
+        # Enable all (alt.)
+        allowed_chapters:
+          - All
 
-    # A mix of values
-    allowed_chapters:
-      - Prequel Trilogy
-      - Episode 4
-      - 5-2
-      - 5-3
-      - 6-5
+        # Enable only vehicle levels
+        allowed_chapters:
+          - 1-4
+          - 2-2
+          - 2-5
+          - 3-1
+          - 4-6
+          - 5-1
+          - 5-3
+          - 6-6
+
+        # A mix of values
+        allowed_chapters:
+          - Prequel Trilogy
+          - Episode 4
+          - 5-2
+          - 5-3
+          - 6-5
     """
     display_name = "Allowed Chapters"
+    rich_text_doc = True
     default = frozenset({"All"})
 
 
@@ -263,38 +451,41 @@ class PreferredChapters(ChapterOptionSet):
     Individual chapters can be specified, e.g. "1-1", "5-4".
 
     Special values:
+
     - "Prequel Trilogy": All chapters in episodes 1, 2 and 3 will be preferred.
     - "Original Trilogy": All chapters in episode 4, 5 and 6 will be preferred.
     - "Episode {number}": e.g. "Episode 3" will make all chapters in Episode 3, so 3-1 through to 3-6, be preferred.
 
-    Examples:
-    # Prefer 1-1 (Negotiations)
-    preferred_chapters: ["1-1"]
+    Examples::
 
-    # Prefer 1-1 (Negotiations) (alt.)
-    preferred_chapters:
-      - 1-1
+        # Prefer 1-1 (Negotiations)
+        preferred_chapters: ["1-1"]
 
-    # Prefer vehicle levels
-    preferred_chapters:
-      - 1-4
-      - 2-2
-      - 2-5
-      - 3-1
-      - 4-6
-      - 5-1
-      - 5-3
-      - 6-6
+        # Prefer 1-1 (Negotiations) (alt.)
+        preferred_chapters:
+          - 1-1
 
-    # A mix of values
-    preferred_chapters:
-      - Prequel Trilogy
-      - Episode 4
-      - 5-2
-      - 5-3
-      - 6-5
+        # Prefer vehicle levels
+        preferred_chapters:
+          - 1-4
+          - 2-2
+          - 2-5
+          - 3-1
+          - 4-6
+          - 5-1
+          - 5-3
+          - 6-6
+
+        # A mix of values
+        preferred_chapters:
+          - Prequel Trilogy
+          - Episode 4
+          - 5-2
+          - 5-3
+          - 6-5
     """
     display_name = "Preferred Chapters"
+    rich_text_doc = True
     # There is no point to using "All" for Preferred Chapters, so remove it from the valid_keys.
     valid_keys = [key for key in ChapterOptionSet.valid_keys if key != "All"]
     default = frozenset()
@@ -316,6 +507,7 @@ class PreferEntireEpisodes(Toggle):
     When combined with the Preferred Chapters option, this option can be used to guarantee entire episodes.
     """
     display_name = "Prefer Entire Episodes"
+    rich_text_doc = True
 
 
 class EnableMinikitLocations(DefaultOnToggle):
@@ -336,16 +528,34 @@ class EnableMinikitLocations(DefaultOnToggle):
     Brick logic.
     """
     display_name = "Enable Minikit Locations"
+    rich_text_doc = True
 
 
 class EnableTrueJediLocations(DefaultOnToggle):
     """
     Enable locations for completing True Jedi in each enabled Chapter.
 
+    Some True Jedi logically expect 1 Progressive Score Multiplier because they are otherwise too difficult or
+    impossible with only the Story characters for the Chapter:
+
+    - 1-6
+    - 2-6
+    - 3-3
+    - 3-5
+    - 3-6
+    - 5-1
+    - 5-2
+    - 5-6
+    - 6-5
+
+    The logic for difficult True Jedi is intended to be reworked in the future to account for additional characters
+    giving access to more studs within a Chapter, therefore making True Jedi easier to complete.
+
     When True Jedi locations are not enabled, Bonus levels will not consider True Jedi Gold Bricks as part of Gold Brick
     logic.
     """
     display_name = "Enable True Jedi Locations"
+    rich_text_doc = True
 
 
 class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
@@ -367,6 +577,7 @@ class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
     With all Chapters enabled, this adds 56 locations.
     """
     display_name = "Chapter Completion Character Unlocks"
+    rich_text_doc = True
 
 
 class EnableBonusLocations(Toggle):
@@ -387,17 +598,18 @@ class EnableBonusLocations(Toggle):
     With all Chapters enabled, this adds 8 locations.
     """
     display_name = "Bonuses"
+    rich_text_doc = True
 
 
 class EnableAllEpisodesCharacterPurchaseLocations(Toggle):
     """
-    Enable the expensive character purchase locations for IG-88, Dengar, 4-LOM, Ben Kenobi (Ghost), Anakin Skywalker
-    (Ghost), Yoda (Ghost) and R2-Q5.
+    Enable the expensive character purchase locations for *IG-88*, *Dengar*, *4-LOM*, *Ben Kenobi (Ghost)*,
+    *Anakin Skywalker (Ghost)*, *Yoda (Ghost)* and *R2-Q5*.
 
     In vanilla, these locations unlock after completing Story mode for every chapter, but the AP randomizer changes
     these shop purchases to unlock according to the All Episodes Character Purchase Requirements option.
 
-    Even when the locations are disabled, the vanilla characters, IG-88, Dengar etc. may still be added to the item
+    Even when the locations are disabled, the vanilla characters, *IG-88*, *Dengar* etc. may still be added to the item
     pool.
 
     Attempting to purchase the vanilla characters from the shop while the locations are disabled will not unlock the
@@ -406,6 +618,100 @@ class EnableAllEpisodesCharacterPurchaseLocations(Toggle):
     This adds 7 locations.
     """
     display_name = "'All Episodes' Character Purchases"
+    rich_text_doc = True
+
+
+class Ridesanity(Toggle):
+    """
+    Enable locations for riding each unique type of ridable 'character' (creature, vehicle, turret, crane control) in
+    the game.
+
+    This notably adds a few extra checks to the LEGO City and New Town bonus levels.
+
+    If none of your enabled levels contain a specific ridable character, then the location riding for that character
+    will not exist in the generated world.
+
+    Ridesanity adds up to 27 locations.
+
+    There are 27 unique ridable characters:
+    - AT-AT (6-3)
+    - AT-ST (4-3, 6-3, 6-4, LEGO City)
+    - Bantha (4-2, LEGO City, New Town)
+    - Basketball Cannon (New Town)
+    - Big Skiff Cannon (6-2)
+    - Cantina Car (Cantina)
+    - Clone Walker (3-4, New Town)
+    - Cloud Car (5-6, LEGO City, New Town) (the red car)
+    - Crane Control (4-1, 4-4, 4-5, 5-5, 5-6) (also controls Magnets, Window Cleaners and Turbolasers)
+    - Dewback (4-2, 4-3, LEGO City, New Town)
+    - Ewok Catapult (6-4)
+    - Firetruck (New Town)
+    - Flash Speeder (1-5)
+    - Landspeeder (4-2, 4-3, LEGO City, New Town)
+    - Lifeboat (New Town)
+    - Moon Car (4-1, LEGO City, New Town) (the orange car)
+    - Mos Eisley Cannon (4-3) (used to get a Minikit)
+    - Service Car (1-5, 1-6, 4-5) (the floating car with no wheels)
+    - Skiff Cannon (6-2)
+    - Speeder Bike (6-3)
+    - Snowmobile (5-2)
+    - STAP (1-1)
+    - Stormtrooper Cannon (5-2, 5-5)
+    - Tauntaun (5-2, LEGO City, New Town)
+    - Town Car (4-1, LEGO City, New Town) (the white van-like car)
+    - Tractor (5-4, 6-4, LEGO City, New Town)
+    - Wookie Flyer (LEGO City)
+
+    Alternatively listed by levels and the ridable characters found within them:
+    - Cantina: Cantina Car
+    - 1-1 (Negotiations): STAP
+    - 1-5 (Retake Theed Palace): Flash Speeder, Service Car
+    - 1-6 (Darth Maul): Service Car
+    - 3-4 (Defense of Kashyyyk): Clone Walker
+    - 4-1 (Secret Plans): Crane Control, Moon Car, Town Car
+    - 4-2 (Through The Jundland Wastes): Bantha, Dewback, Landspeeder
+    - 4-3 (Mos Eisley Spaceport): AT-ST, Dewback, Landspeeder, Mos Eisley Cannon
+    - 4-4 (Rescue The Princess): Crane Control
+    - 4-5 (Death Star Escape): Crane Control, Service Car
+    - 5-2 (Escape From Echo Base): Snowmobile, Stormtrooper Cannon, Tauntaun
+    - 5-4 (Dagobah): Tractor
+    - 5-5 (Cloud City Trap): Crane Control, Stormtrooper Cannon
+    - 5-6 (Betrayal Over Bespin): Cloud Car, Crane Control
+    - 6-2 (The Great Pit Of Carkoon): Big Skiff Cannon, Skiff Cannon
+    - 6-3 (Speeder Showdown): AT-AT, AT-ST, Speeder Bike
+    - 6-4 (The Battle Of Endor): AT-ST, Ewok Catapult, Tractor
+    - LEGO City: AT-ST, Bantha, Cloud Car, Dewback, Landspeeder, Moon Car, Tauntaun, Town Car, Tractor, Wookie flyer
+    - New Town: Bantha, Basketball Cannon, Clone Walker, Cloud Car, Dewback, Firetruck, Landspeeder, Lifeboat, Moon Car, Tauntaun, Town Car, Tractor
+    """
+    display_name = "Ridesanity Locations"
+    rich_text_doc = True
+
+
+class EnableNonPowerBrickExtraLocations(DefaultOnToggle):
+    """
+    Enable locations for purchasing the Extras from the shop that do not require Power Bricks to unlock, and allow those
+    Extras to be shuffled into the item pool.
+
+    Adds 7 locations usually accessible from the start.
+
+    These are:
+    - Purchase Extra Toggle
+    - Purchase Fertilizer
+    - Purchase Disguise
+    - Purchase Daisy Chains
+    - Purchase Chewbacca Carrying C-3PO
+    - Purchase Tow Death Star
+    - Purchase Beep Beep
+
+    They are all classified as Filler items, except Extra Toggle, which is classified as Useful because of Mouse Droid's
+    high movement speed and a few Extra Toggle characters having abilities (in the future Extra Toggle will be
+    Progression).
+
+    If this option is not enabled, the locations will still exist in the multiworld, but will contain their vanilla
+    items.
+    """
+    display_name = "Non Power Brick Extra Purchases"
+    rich_text_doc = True
 
 
 class ChapterUnlockRequirement(ChoiceFromStringExtension):
@@ -414,13 +720,16 @@ class ChapterUnlockRequirement(ChoiceFromStringExtension):
     The requirements to access your starting Chapter will be given to you at the start.
 
     - Story Characters: A Chapter unlocks once its Story mode characters have been unlocked.
-    - Chapter Item: A Chapter unlocks after receiving an unlock item specific to that Chapter, e.g.
-    "Chapter 2-3 Unlock".
+    - Chapter Item (not implemented): A Chapter unlocks after receiving an unlock item specific to that Chapter,
+    e.g. "Chapter 2-3 Unlock".
+    - Random Characters (not implemented): Each Chapter requires randomly chosen characters to unlock.
+    - Open (not implemented): All chapters within an Episode are unlocked as soon as the Episode is unlocked.
     """
     display_name = "Chapter Unlock Requirements"
+    rich_text_doc = True
     option_story_characters = 0
-    option_chapter_item = 1
-    # option_random_characters = 2
+    # option_chapter_item = 1  # Needs logic rewrite
+    # option_random_characters = 2  # Needs logic rewrite + some way to display what characters are needed in-game.
     # option_open = 3  # Needs the ability to limit characters to only being usable within a specific episode/
     default = 0
 
@@ -428,7 +737,10 @@ class ChapterUnlockRequirement(ChoiceFromStringExtension):
 class EpisodeUnlockRequirement(ChoiceFromStringExtension):
     """Choose how Episodes are unlocked.
 
-    Note: An Episode door in the Cantina will only unlock when a Chapter within that Episode has been unlocked.
+    Note: If an Episode is unlocked, but no Chapters within that Episode are unlocked, the Episode's door in the Cantina
+    will remain locked until one of the Chapters is unlocked.
+    Note: If an Episode's door unlocks while you are in the same room of the Cantina as the Episode doors, the light
+    above the Episode door that unlocked will remain red until the room is reloaded, but the door will open normally.
 
     The Episode of your starting Chapter will always be unlocked from the start.
 
@@ -436,6 +748,7 @@ class EpisodeUnlockRequirement(ChoiceFromStringExtension):
     - Episode Item: Each Episode will unlock after receiving an unlock item for that Episode, e.g. "Episode 5 Unlock".
     """
     display_name = "Episode Unlock Requirements"
+    rich_text_doc = True
     option_open = 0
     option_episode_item = 1
     default = 0
@@ -450,11 +763,14 @@ class AllEpisodesCharacterPurchaseRequirements(ChoiceFromStringExtension):
     - Episodes Unlocked: The shop purchases will unlock when the "Episode # Unlock" item for each Episode with enabled
     Chapters has been received. If the Episode Unlock Requirement is set to Open or there is only 1 enabled Episode,
     this will be forcefully changed to "Episodes Tokens" instead.
-    - Episodes Tokens: A number of "All Episodes Token" items will be added to the item pool, equal to the number of
-    enabled Episodes. All of these "All Episodes Token" items will need to be received to unlock the characters for
-    purchase.
+    - Episodes Tokens: 6 "Episode Completion Token" items need to be acquired to unlock the characters for purchase. The
+    number of "Episode Completion Token" items in the item pool is equal to your number of enabled chapters divided by 6
+    and rounded to the nearest integer, but always at least 1. The remaining "Episode Completion Token" items will be
+    added to your starting inventory. For example, if you have 28 chapters enabled, 28 / 6 = 4.666 -> 5 in the pool and
+    1 in your starting inventory.
     """
     display_name = "'All Episodes' Character Purchase Unlock Requirements"
+    rich_text_doc = True
     option_episodes_unlocked = 1
     option_episodes_tokens = 2
     default = 2
@@ -466,11 +782,12 @@ class AllEpisodesCharacterPurchaseRequirements(ChoiceFromStringExtension):
 #     """Extra Toggle characters are included in logic"""
 
 
-class StartingChapter(ChoiceFromStringExtension):
+class StartingChapter(ChapterChoice):
     """
     Choose the starting chapter. The Episode the starting Chapter belongs to will be accessible from the start.
 
     Known issues:
+
     - If the starting Chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
     to the Archipelago server, the starting Episode door will appear locked (red light), but this is only visual.
     - If the starting Chapter belongs to an Episode other than Episode 1, when starting a new save file and connecting
@@ -478,7 +795,7 @@ class StartingChapter(ChoiceFromStringExtension):
     main room of the Cantina.
     - Due to the way the logic currently assumes the player has access to a Jedi and a Protocol Droid, if access to the
     chosen starting Chapter does not include a Jedi and Protocol Droid in its requirements, a Jedi character and/or
-    TC-14 will be added to the starting inventory.
+    a Protocol Droid character will be added to the starting inventory.
 
     Due to the character requirements being shared between some Chapters, some starting Chapters will result in
     additional Chapters being open from the start:
@@ -493,72 +810,22 @@ class StartingChapter(ChoiceFromStringExtension):
     Starting with 6-6 will also open 5-3 if the Episode Unlock Requirement is set to Open.
     """
     display_name = "Starting Chapter"
-    # todo: Try setting the attributes for specific levels such that they use 1-1 format rather than 1_1.
-    # Variable names cannot use hyphens, so the options for specific levels are set programmatically.
-    # option_1-1 = 11
-    # option_1-2 = 12
-    # etc.
-    locals().update({f"option_{episode}-{chapter}": int(f"{episode}{chapter}")
-                     for episode, chapter in itertools.product(range(1, 7), range(1, 7))})
-    # option_1_1 = 11
-    # option_1_2 = 12
-    # option_1_3 = 13
-    # option_1_4 = 14
-    # option_1_5 = 15
-    # option_1_6 = 16
-    # option_2_1 = 21
-    # option_2_2 = 22
-    # option_2_3 = 23
-    # option_2_4 = 24
-    # option_2_5 = 25
-    # option_2_6 = 26
-    # option_3_1 = 31
-    # option_3_2 = 32
-    # option_3_3 = 33
-    # option_3_4 = 34
-    # option_3_5 = 35
-    # option_3_6 = 36
-    # option_4_1 = 41
-    # option_4_2 = 42
-    # option_4_3 = 43
-    # option_4_4 = 44
-    # option_4_5 = 45
-    # option_4_6 = 46
-    # option_5_1 = 51
-    # option_5_2 = 52
-    # option_5_3 = 53
-    # option_5_4 = 54
-    # option_5_5 = 55
-    # option_5_6 = 56
-    # option_6_1 = 61
-    # option_6_2 = 62
-    # option_6_3 = 63
-    # option_6_4 = 64
-    # option_6_5 = 65
-    # option_6_6 = 66
-    option_random_chapter = -1
-    option_random_non_vehicle = -2
-    option_random_vehicle = -3
-    option_random_episode_1 = 1
-    option_random_episode_2 = 2
-    option_random_episode_3 = 3
-    option_random_episode_4 = 4
-    option_random_episode_5 = 5
-    option_random_episode_6 = 6
+    rich_text_doc = True
     default = 11
 
 
 class RandomStartingLevelMaxStartingCharacters(Range):
     """Specify the maximum number of starting characters allowed when picking a random starting level.
 
-    1 Character: 1-4, 2-1, 2-5, 5-1 (all vehicle levels)
-    2 Characters: 1-6, 2-2, 3-1 (v), 3-3, 3-4, 3-5, 3-6, 4-6 (v), 5-3 (v), 5-5, 6-3, 6-5, 6-6 (v)
-    3 Characters: 1-1, 1-2, 2-6
-    4 Characters: 1-3, 2-3, 2-4, 3-2, 4-2, 5-2, 5-4, 5-6
-    5 Characters: 4-1
-    6 Characters: 1-5, 4-3, 4-4, 4-5, 6-1, 6-4
-    7 Characters: 6-2"""
+    - 1 Character: 1-4, 2-1, 2-5, 5-1 (all vehicle levels)
+    - 2 Characters: 1-6, 2-2, 3-1 (v), 3-3, 3-4, 3-5, 3-6, 4-6 (v), 5-3 (v), 5-5, 6-3, 6-5, 6-6 (v)
+    - 3 Characters: 1-1, 1-2, 2-6
+    - 4 Characters: 1-3, 2-3, 2-4, 3-2, 4-2, 5-2, 5-4, 5-6
+    - 5 Characters: 4-1
+    - 6 Characters: 1-5, 4-3, 4-4, 4-5, 6-1, 6-4
+    - 7 Characters: 6-2"""
     display_name = "Random Starting Chapter Max Starting Characters",
+    rich_text_doc = True
     range_start = 2
     range_end = 7
     default = 7
@@ -577,6 +844,7 @@ class PreferredCharacters(OptionSet):
     If no vehicle Chapters are enabled, no vehicle characters will be included in the item pool.
     """
     display_name = "Preferred Characters"
+    rich_text_doc = True
     valid_keys = {char.name for char in CHARACTERS_AND_VEHICLES_BY_NAME.values() if char.is_sendable}
     default = frozenset({
         # Highest base movement speed or non-Extra-Toggle characters, lots of glitches.
@@ -598,7 +866,7 @@ class PreferredExtras(OptionSet):
     reduced, so not all Extras may get added to the item pool.
 
     The names of all items can be found by starting the Lego Star Wars: The Complete Saga client and entering the
-    `/items` command.
+    ``/items`` command.
 
     Score Multipliers that are logically required, due to the Most Expensive Purchase With No Score Multiplier option,
     will always be included in the item pool.
@@ -608,6 +876,7 @@ class PreferredExtras(OptionSet):
     score multiplier.
     """
     display_name = "Preferred Extras"
+    rich_text_doc = True
     valid_keys = {
         # Progressive Score Multiplier is an AP-specific item, and this option does not support specifying multiple of
         # an item, so the individual "Score x{number}" Extras are included as valid keys instead.
@@ -631,6 +900,8 @@ class PreferredExtras(OptionSet):
         "Self Destruct",
         # Out-of-logic BOUNTY_HUNTER access (silver bricks only)
         "Super Ewok Catapult",
+        # BLASTER and IMPERIAL out-of-logic, also speeds up levels with Mouse Droids
+        "Extra Toggle",
 
         # Speed up playing:
         # Useful for survivability/True Jedi, especially in vehicle chapters, and a few places where hostile NPCs can be
@@ -663,6 +934,7 @@ class StartWithDetectors(DefaultOnToggle):
     When these Extras are enabled, the locations of Minikits and Power Bricks in the current level are shown with
     arrows."""
     display_name = "Start With Detector Extras"
+    rich_text_doc = True
 
 
 class FillerReserveCharacters(DefaultOnToggle):
@@ -674,6 +946,7 @@ class FillerReserveCharacters(DefaultOnToggle):
     locations. Additional Characters will only get added to the item pool through the Filler Weight: Characters option.
     """
     display_name = "Filler Reserve: Characters"
+    rich_text_doc = True
 
 
 class FillerReserveExtras(DefaultOnToggle):
@@ -685,6 +958,7 @@ class FillerReserveExtras(DefaultOnToggle):
     Additional Extras will only get added to the item pool through the Filler Weight: Extras option.
     """
     display_name = "Filler Reserve: Extras"
+    rich_text_doc = True
 
 
 class FillerWeightCharacters(Range):
@@ -703,9 +977,10 @@ class FillerWeightCharacters(Range):
     # contains enough characters to reach every location. There are also often many character unlocks for each chapter
     # completed.
     display_name = "Filler Weight: Characters"
+    rich_text_doc = True
     range_start = 0
     range_end = 100
-    default = 40
+    default = 10
 
 
 class FillerWeightExtras(Range):
@@ -723,6 +998,7 @@ class FillerWeightExtras(Range):
     # There is only one Extra reserved in the item pool per chapter and Extras tend to have unique effects, so the
     # default weight is higher.
     display_name = "Filler Weight: Extras"
+    rich_text_doc = True
     range_start = 0
     range_end = 100
     default = 30
@@ -735,8 +1011,7 @@ class FillerWeightJunk(Range):
     options results in more Studs and other filler Archipelago items in the item pool, compared to other items used to
     fill out the rest of the item pool.
 
-    Purple Stud is currently the only junk filler Archipelago item that is implemented, but more will likely be added in
-    the future.
+    The weight of each Junk Filler item can be controlled with the separate Junk Weights option.
 
     The generator tries to fill the item pool with as many Characters and Extras as would be unlocked, in vanilla, by
     all the enabled locations.
@@ -745,15 +1020,89 @@ class FillerWeightJunk(Range):
     space in the item pool for any kind of item.
     """
     display_name = "Filler Weight: Junk"
+    rich_text_doc = True
     range_start = 0
     range_end = 100
     default = 30
 
 
+class JunkWeights(ItemDict):
+    """Control the weight of each Junk Filler item.
+
+    If all weight are set to zero, all Junk will be Purple Studs.
+
+    Purple Studs give 10000 Studs when received.
+
+    Power Up items give 20 seconds of invincibility, 2x score multiplier and a number of other beneficial effects.
+    Power Up items will not be used while in the Cantina, LEGO City, New Town or Battle Over Coruscant (3-1).
+    Unused Power Up items do not carry over to the next play session.
+    """
+    display_name = "Junk Weights"
+    rich_text_doc = True
+    valid_keys = ITEM_GROUPS["Junk"]
+    default = {
+        "Power Up": 15,
+        "Silver Stud": 1,
+        "Gold Stud": 5,
+        "Blue Stud": 50,
+        "Purple Stud": 15,
+    }
+
+
+class UncapOriginalTrilogyHighJump(Toggle):
+    """Original Trilogy Chapters, Bonuses and the Cantina cap High Jump height to about the same as a Jedi double jump
+    because they were not designed for being able to High Jump.
+
+    Enabling this option will remove the cap, restoring High Jump height to the same as seen in Prequel Trilogy
+    Chapters.
+
+    The logic does not currently account for this option being enabled.
+    """
+    display_name = "Uncap Original Trilogy High Jump"
+    rich_text_doc = True
+
+
+class EasierTrueJedi(Toggle):
+    """When enabled, the True Jedi requirements in Free Play will be set to the Story True Jedi requirement, which is
+    usually less.
+
+    True Jedi in Free Play usually has higher requirements than True Jedi in Story and can be very difficult, if not
+    impossible, with just the Story characters for that Chapter.
+
+    Without this option enabled, the following Chapters will gain a logical requirement for Score x2 due to their
+    difficulty/impossibility of achieving True Jedi in Free Play with just the Story characters for the Chapter:
+
+    - 1-6
+    - 2-6
+    - 3-3
+    - 3-5
+    - 3-6
+    - 5-1
+    - 5-2
+    - 5-6
+    - 6-5
+    """
+    display_name = "Easier True Jedi"
+    rich_text_doc = True
+
+
+class ScaleTrueJediWithScoreMultipliers(Toggle):
+    """Scale True Jedi requirements with the number of Progressive Score Multipliers acquired.
+
+    If Easier True Jedi is not enabled, the True Jedi that logically require Score x2 will also scale but only with
+    Score x4 and higher.
+
+    The scaling is applied only when entering a Chapter and will not adjust dynamically if you receive/find additional
+    Progressive Score Multiplier items while within the entered Chapter.
+    """
+    display_name = "Scale True Jedi With Multipliers"
+    rich_text_doc = True
+
+
 class MostExpensivePurchaseWithNoScoreMultiplier(NamedRange):
     """
     The most expensive individual purchase the player can be expected to make without any score multipliers, *in
-    thousands of Studs*.
+    thousands of Studs* (number of Blue Studs).
 
     For example, an option value of 100 means that purchases up to 100,000 studs in price can be expected to be
     purchased without any score multipliers.
@@ -769,6 +1118,7 @@ class MostExpensivePurchaseWithNoScoreMultiplier(NamedRange):
     20000 means that all purchases are logically expected without score multipliers.
     """
     display_name = "Most Expensive Purchase Without Score Multipliers"
+    rich_text_doc = True
     default = 100
     # Max purchase cost is 20_000_000
     # 5 * 1000 * 3840 = 19_200_000 -> 5 is too low
@@ -808,10 +1158,11 @@ class ReceivedItemMessages(ChoiceFromStringExtension):
     - None: All items are received silently.
     """
     display_name = "Received Item Messages"
-    default = 0
-    option_all = 0
-    option_none = 1
-    # option_progression = 2  # Not Yet Implemented
+    rich_text_doc = True
+    default = 1
+    option_none = 0
+    option_all = 1
+    option_progression = 2
 
 
 class CheckedLocationMessages(ChoiceFromStringExtension):
@@ -827,9 +1178,10 @@ class CheckedLocationMessages(ChoiceFromStringExtension):
     - None: No checked locations show a message
     """
     display_name = "Checked Location Messages"
-    default = 0
-    option_all = 0
-    option_none = 1
+    rich_text_doc = True
+    default = 1
+    option_none = 0
+    option_all = 1
 
 
 class LogicDifficulty(ChoiceFromStringExtension):
@@ -843,7 +1195,7 @@ class LogicDifficulty(ChoiceFromStringExtension):
       - No glitches expected.
       - Players that have played most of the vanilla game should be able to play with this difficulty.
       - Expects more platforming that probably wasn't developer intended, but it generally quite obvious and simple.
-      - Logic starts expecting the use of Extras:
+      - Logic expects the use of Extras:
         - Self Destruct, Exploding Blaster Bolts, and Super Ewok Catapult can be expected for destroying Silver Brick
         objects.
         - Force Grapple Leap can be expected to use Grapple points.
@@ -856,13 +1208,15 @@ class LogicDifficulty(ChoiceFromStringExtension):
       - Simpler glitches expected.
       - Players that play the AP randomizer often should be able to perform all tricks in this difficulty efficiency,
       after some practice and/or learning.
-      - Slam triple jumps included in logic.
+      - Slam-jumps, e.g. Jedi-Triple-Jump included in logic.
       - Expects more platforming off of terrain
       - (incomplete, most levels will use None difficulty logic)
     - Hard:
       - More difficult jumps and tricks.
       - (incomplete, most levels will use None difficulty logic)
     """
+    display_name = "Logic Difficulty"
+    rich_text_doc = True
     # - Expert: Includes out-of-bounds clips and 1P2C that is more than just holding down a single button for P2.
     # Comparable to Glitched logic in ViolaGuy's TCS randomizer.
     # - Super Expert: Super Jumps, DV3 Skip, CCT door clip and more. Comparable to Super Glitched logic in ViolaGuy's
@@ -875,6 +1229,93 @@ class LogicDifficulty(ChoiceFromStringExtension):
     # option_super_expert = 5
 
 
+# Not using DeathLinkMixin currently because the docstring needs to be different.
+class LegoStarWarsTCSDeathLink(DeathLink):
+    """When you die, everyone who enabled death link dies. Of course, the reverse is true too.
+
+    Death Link can be toggled on/off in the client with ``/toggle_death_link``.
+
+    Known issues:
+    - Studs are not dropped when receiving a death, however, you can use the Death Link Studs Loss option to cause a
+    loss of studs when receiving a death.
+    """
+    display_name = "Death Link"
+    rich_text_doc = True
+
+
+class DeathLinkAmnesty(Range):
+    """The number of deaths allowed before the next death is sent through Death Link.
+
+    0 means that every death will be sent through Death Link,
+    1 means every other death will send through Death Link, etc.
+
+    Applies to most Chapters and other levels (every level not covered by Vehicle Death Link Amnesty).
+    """
+    display_name = "Normal Death Link Amnesty"
+    rich_text_doc = True
+    range_start = 0
+    range_end = 10
+    default = 0
+
+
+class VehicleDeathLinkAmnesty(Range):
+    """The number of deaths allowed before the next death is sent through Death Link.
+
+    \\*Applies to top-down vehicle levels and bonus vehicle levels that are easier to die in.
+
+    Applies to:
+
+    - 2-1 (Bounty Hunter Pursuit)
+    - 2-5 (Gunship Cavalry)
+    - 4-6 (Rebel Attack)
+    - 5-1 (Hoth Battle)
+    - 5-3 (Falcon Flight)
+    - 6-6 (Into The Death Star)
+    - Mos Espa Pod Race (Original)
+    - Anakin's Flight
+    - Gunship Cavalry (Original)
+
+    Does not apply to:
+
+    - 1-4 (Mos Espa Pod Race)
+    - 3-1 (Battle Over Coruscant)
+    """
+    display_name = "Vehicle* Death Link Amnesty"
+    rich_text_doc = True
+    range_start = 0
+    range_end = 10
+    default = 3
+
+
+class DeathLinkStudLoss(ChoiceFromStringExtension):
+    """Choose how many studs are lost when receiving a death from Death Link.
+
+    The studs will not spawn around you, and will be permanently lost.
+
+    This is a temporary option while it is not possible for the client to perform a normal death that spawns studs."""
+    display_name = "Death Link Studs Loss"
+    rich_text_doc = True
+    option_0 = 0
+    option_1000 = 1000
+    option_2000 = 2000
+    option_3000 = 3000
+    option_4000 = 4000
+    option_5000 = 5000
+    option_6000 = 6000
+    option_7000 = 7000
+    option_8000 = 8000
+    option_9000 = 9000
+    option_10000 = 10000
+    default = 2000
+
+
+class DeathLinkStudLossScaling(Toggle):
+    """When enabled, the stud loss from receiving a death from Death Link is multiplied by your maximum combined score
+    multiplier."""
+    display_name = "Death Link Studs Loss Scaling"
+    rich_text_doc = True
+
+
 @dataclass
 class LegoStarWarsTCSOptions(PerGameCommonOptions):
     start_inventory_from_pool: StartInventoryPool
@@ -882,12 +1323,21 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     # Goals.
     minikit_goal_amount: MinikitGoalAmount
     minikit_goal_amount_percentage: MinikitGoalAmountPercentage
+    minikit_goal_completion_method: MinikitGoalCompletionMethod
     minikit_bundle_size: MinikitBundleSize
 
     defeat_bosses_goal_amount: DefeatBossesGoalAmount
     enabled_bosses_count: EnabledBossesCount
     allowed_bosses: AllowedBosses
     only_unique_bosses_count: OnlyUniqueBossesCountTowardsGoal
+
+    complete_levels_goal_amount_percentage: CompleteLevelsGoalAmountPercentage
+
+    goal_requires_kyber_bricks: GoalRequiresKyberBricks
+    kyber_brick_goal_completion_method: KyberBrickGoalCompletionMethod
+
+    goal_chapter_locations_mode: GoalChapterLocationsMode
+    goal_chapter: GoalChapter
 
     # Enabled/Available locations.
     # Chapters.
@@ -902,14 +1352,17 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     enable_all_episodes_purchases: EnableAllEpisodesCharacterPurchaseLocations
     enable_minikit_locations: EnableMinikitLocations
     enable_true_jedi_locations: EnableTrueJediLocations
+    enable_starting_extras_locations: EnableNonPowerBrickExtraLocations
+    ridesanity: Ridesanity
 
-    # Logic.
+    # Logic and Difficulty.
     # logic_difficulty: LogicDifficulty
     episode_unlock_requirement: EpisodeUnlockRequirement
-    # todo: Requires logic rewrite
-    # chapter_unlock_requirement: ChapterUnlockRequirement
+    chapter_unlock_requirement: ChapterUnlockRequirement
     most_expensive_purchase_with_no_multiplier: MostExpensivePurchaseWithNoScoreMultiplier
     all_episodes_character_purchase_requirements: AllEpisodesCharacterPurchaseRequirements
+    easier_true_jedi: EasierTrueJedi
+    scale_true_jedi_with_score_multipliers: ScaleTrueJediWithScoreMultipliers
 
     # Items.
     preferred_characters: PreferredCharacters
@@ -920,10 +1373,20 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     filler_weight_characters: FillerWeightCharacters
     filler_weight_extras: FillerWeightExtras
     filler_weight_junk: FillerWeightJunk
+    junk_weights: JunkWeights
 
     # Client behaviour.
     received_item_messages: ReceivedItemMessages
     checked_location_messages: CheckedLocationMessages
+    uncap_original_trilogy_high_jump: UncapOriginalTrilogyHighJump
+
+    # Death Link.
+    death_link: LegoStarWarsTCSDeathLink
+    death_link_amnesty: DeathLinkAmnesty
+    vehicle_death_link_amnesty: VehicleDeathLinkAmnesty
+    death_link_studs_loss: DeathLinkStudLoss
+    death_link_studs_loss_scaling: DeathLinkStudLossScaling
+
     # Future options, not implemented yet.
     # random_starting_level_max_starting_characters: RandomStartingLevelMaxStartingCharacters
 
@@ -932,12 +1395,22 @@ OPTION_GROUPS: list[OptionGroup] = [
     OptionGroup("Minikit Goal Options", [
         MinikitGoalAmount,
         MinikitGoalAmountPercentage,
+        MinikitGoalCompletionMethod,
     ]),
     OptionGroup("Bosses Goal Options", [
         DefeatBossesGoalAmount,
         EnabledBossesCount,
         AllowedBosses,
         OnlyUniqueBossesCountTowardsGoal,
+    ]),
+    OptionGroup("Goal Chapter Options", [
+        GoalChapter,
+        GoalChapterLocationsMode,
+    ]),
+    OptionGroup("Other Goal Options", [
+        CompleteLevelsGoalAmountPercentage,
+        GoalRequiresKyberBricks,
+        KyberBrickGoalCompletionMethod,
     ]),
     OptionGroup("Chapter Options", [
         EnabledChaptersCount,
@@ -953,9 +1426,14 @@ OPTION_GROUPS: list[OptionGroup] = [
         EnableChapterCompletionCharacterUnlockLocations,
         EnableBonusLocations,
         EnableAllEpisodesCharacterPurchaseLocations,
+        EnableNonPowerBrickExtraLocations,
+        Ridesanity,
     ]),
-    OptionGroup("Logic Options", [
+    OptionGroup("Logic and Difficulty Options", [
         EpisodeUnlockRequirement,
+        ChapterUnlockRequirement,
+        EasierTrueJedi,
+        ScaleTrueJediWithScoreMultipliers,
         MostExpensivePurchaseWithNoScoreMultiplier,
         AllEpisodesCharacterPurchaseRequirements,
     ]),
@@ -969,9 +1447,18 @@ OPTION_GROUPS: list[OptionGroup] = [
         FillerWeightCharacters,
         FillerWeightExtras,
         FillerWeightJunk,
+        JunkWeights,
     ]),
     OptionGroup("Client Options", [
         ReceivedItemMessages,
         CheckedLocationMessages,
+        UncapOriginalTrilogyHighJump,
+    ]),
+    OptionGroup("Death Link Options", [
+        LegoStarWarsTCSDeathLink,
+        DeathLinkAmnesty,
+        VehicleDeathLinkAmnesty,
+        DeathLinkStudLoss,
+        DeathLinkStudLossScaling,
     ])
 ]

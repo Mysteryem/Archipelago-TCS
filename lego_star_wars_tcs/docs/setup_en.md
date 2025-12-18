@@ -1,7 +1,5 @@
 # Setup Guide for Lego Star Wars: The Complete Saga in Archipelago
 
-Work-in-progress.
-
 ## Required Software
 - PC Release of Lego Star Wars: The Complete Saga
   - Both the Steam version and GOG version are supported.
@@ -10,8 +8,6 @@ future.
   - The retail PC release is not expected to work currently, unless it is identical to the GOG version.
 - Archipelago
 - Lego Star Wars: The Complete Saga apworld
-- Windows Operating System
-  - The client uses the `pymem` library, to read from/write to the game's memory, which only supports Windows.
 
 ## Optional Software
 - [Lego Star Wars: The Complete Saga Archipelago Tracker](https://github.com/Mysteryem/TCS_AP_PopTracker/releases/latest), 
@@ -50,3 +46,11 @@ The first time a save file connects to an Archipelago server, the slot name need
 name will be set into the save data and read automatically from the save file by the client when connecting.
 
 An in-game message will be displayed when the client is fully connected and running.
+
+## Additional Setup for Linux
+The client uses the `pymem` library, to read from/write to the game's memory, which only directly supports Windows,
+therefore, additional setup is required to get the AP randomizer to work on Linux.
+
+Follow the steps in [Flit's Linux Guide for Lego Star Wars TCS AP](https://gist.github.com/FlitPix/458ac9fb33610acc8bb3278ce071abca).
+Ping `@flit` in the [Archipelago discord server's Linux & Steamdeck Setup thread](https://discord.com/channels/731205301247803413/957390083193966612)
+for additional assistance with the Linux setup.

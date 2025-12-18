@@ -1,7 +1,7 @@
 import logging
-from typing import Any
 
 from ..common_addresses import CHARACTERS_SHOP_START, ShopType
+from ..events import subscribe_event, OnReceiveSlotDataEvent, OnGameWatcherTickEvent
 from ..type_aliases import TCSContext, ApItemId
 from ...items import CHARACTERS_AND_VEHICLES_BY_NAME, GenericCharacterData, CHARACTER_SHOP_SLOTS
 from . import ItemReceiver
@@ -55,7 +55,8 @@ class AcquiredCharacters(ItemReceiver):
     def __init__(self):
         self.unlocked_characters = set()
 
-    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
+    @subscribe_event
+    def init_from_slot_data(self, _event: OnReceiveSlotDataEvent) -> None:
         self.clear_received_items()
 
     def clear_received_items(self) -> None:
@@ -83,7 +84,8 @@ class AcquiredCharacters(ItemReceiver):
                 and ctx.read_uchar(
                     CHARACTERS_SHOP_ACTIVE_INDEX_ADDRESS) in SHOP_INDICES_UNLOCKED_WHEN_ALL_EPISODES_UNLOCKED)
 
-    async def update_game_state(self, ctx: TCSContext) -> None:
+    @subscribe_event
+    async def update_game_state(self, event: OnGameWatcherTickEvent) -> None:
         """
         Update the game memory that stores which Characters are unlocked, with all the currently unlocked/locked
         Characters according to Archipelago.
@@ -96,6 +98,7 @@ class AcquiredCharacters(ItemReceiver):
         """
         # todo: See if there is a performance hit to doing all 137 (or more once we add more vehicles) writes
         #  separately. It would technically be safer.
+        ctx = event.context
         chars = ctx.read_bytes(START_ADDRESS, NUM_RANDOMIZED_BYTES)
         chars_array = bytearray(chars)
 

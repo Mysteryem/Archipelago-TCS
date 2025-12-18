@@ -15,6 +15,7 @@ LOCATION_GROUPS: dict[str, set[str]] = {
     "True Jedi": _locations_from_indices(110, 145),
     "Chapter Completions": _locations_from_indices(506, 541),
     "Bonuses": _locations_from_indices(547, 554),
+    "Bonus Levels": _locations_from_indices(547, 552),
     "Chapter Completion Character Unlocks": _locations_from_indices(566, 621),
     "Minikits": _locations_from_indices(146, 505),
     **{
@@ -45,4 +46,5 @@ LOCATION_GROUPS: dict[str, set[str]] = {
         f"Character Purchases - {shortname}": set(area.character_shop_unlocks.keys())
         for shortname, area in SHORT_NAME_TO_CHAPTER_AREA.items() if area.character_shop_unlocks
     },
+    "Ridesanity": _locations_from_indices(622, 648),
 }

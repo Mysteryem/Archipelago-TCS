@@ -1,5 +1,4 @@
 import struct
-from collections import Counter
 from dataclasses import dataclass, field
 from typing import ClassVar, NamedTuple
 
@@ -79,6 +78,13 @@ class ChapterArea:
     # "Save and Exit to Cantina", or from completing the level.
     status_level_id: int
     area_id: int
+    story_true_jedi_requirement: int
+    free_play_true_jedi_requirement: int
+    # Index of the AreaData* for this area. AreaData is where the level IDs are stored, as well as True Jedi
+    # requirements. Generally, the indices are in Episode and Chapter order, except 3-1 has two separate pointers in the
+    # array for some reason. The array starts at 0x0087af70 (GOG).
+    # Not currently used.
+    unused_p_area_data_index: int
     ## The address of each Level in the area with minikits, and the names of the minikits in that Level.
     #minikit_address_to_names: dict[int, set[str]]
     # TODO: Convert this file mostly into a script that writes `print(repr(GAME_LEVEL_AREAS))`
@@ -125,13 +131,6 @@ class ChapterArea:
             return None
         return f"{boss} ({self.short_name})"
 
-    @property
-    def boss_character_defeated_event_item_name(self) -> str:
-        boss = self.boss
-        if boss is None:
-            raise ValueError(f"{self} does not have a boss")
-        return f"{boss} Defeated"
-
 
 @dataclass(frozen=True)
 class BonusArea:
@@ -145,9 +144,17 @@ class BonusArea:
     status_level_id: int
     area_id: int
     item_requirements: tuple[str, ...] = ()
-    ability_requirements: CharacterAbility = CharacterAbility.NONE
+    completion_ability_requirements: CharacterAbility = CharacterAbility.NONE
     gold_bricks_required: int = 0
     gold_brick: bool = True
+
+    @property
+    def completion_location_name(self) -> str:
+        if self.gold_brick:
+            return self.name + " Completion"
+        else:
+            # The only Bonus Area without a Gold Brick is not a level to complete, but watching the Indy Trailer.
+            return self.name
 
 
 # GameLevelArea short_name to the set of characters needed to unlock that GameLevelArea
@@ -382,7 +389,7 @@ POWER_BRICK_REQUIREMENTS: dict[str, _PowerBrickData] = {
     "3-4": _PowerBrickData("Super Thermal Detonator", BOUNTY_HUNTER | SITH, 25_000),
     "3-5": _PowerBrickData("Deflect Bolts", SITH | HIGH_JUMP, 150_000),
     "3-6": _PowerBrickData("Dark Side", ASTROMECH, 25_000),
-    "4-1": _PowerBrickData("Super Blasters", None, 15_000),
+    "4-1": _PowerBrickData("Super Blasters", (BOUNTY_HUNTER, IMPERIAL), 15_000),
     "4-2": _PowerBrickData("Fast Force", BOUNTY_HUNTER, 40_000),
     "4-3": _PowerBrickData("Super Lightsabers", None, 40_000),
     "4-4": _PowerBrickData("Tractor Beam", None, 15_000),
@@ -428,7 +435,7 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "4-5": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
     "4-6": VEHICLE_TOW | VEHICLE_TIE,
     "5-1": VEHICLE_TIE,
-    "5-2": SITH | HOVER | ASTROMECH | BOUNTY_HUNTER,
+    "5-2": SITH | HOVER | ASTROMECH | BOUNTY_HUNTER | SHORTIE,
     "5-3": VEHICLE_TOW | VEHICLE_TIE,
     "5-4": SITH | BOUNTY_HUNTER | SHORTIE,
     "5-5": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
@@ -437,7 +444,7 @@ ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
     "6-2": SITH | HOVER | SHORTIE,
     "6-3": SITH | HIGH_JUMP | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
     "6-4": BOUNTY_HUNTER,
-    "6-5": HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE,
+    "6-5": HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE | ASTROMECH,
     "6-6": VEHICLE_TIE,
 }
 
@@ -450,6 +457,7 @@ BOSS_CHARACTERS_BY_SHORTNAME: dict[str, str] = {
     "3-2": "Count Dooku",
     "3-3": "General Grievous",
     "3-6": "Anakin Skywalker",
+    "4-3": "Imperial Spy",
     "4-6": "Death Star",
     "5-4": "Darth Vader",
     "5-5": "Darth Vader",
@@ -460,66 +468,104 @@ BOSS_CHARACTERS_BY_SHORTNAME: dict[str, str] = {
     "6-6": "Death Star II",
 }
 
+# True Jedi that is difficult if not impossible in Free Play with just the Story characters for a level.
+DIFFICULT_OR_IMPOSSIBLE_TRUE_JEDI: set[str] = {
+    # I don't think this is possible, I tried before, even with maximum usage of Power Ups. Higher logic could probably
+    # get this because they can jump to the top of the cylindrical area with all the Battle Droids, which has a bunch of
+    # Blue Studs.
+    "1-6",
+    "2-6",  # I only managed 14180/22000
+    "3-3",  # Barely possible by re-entering and getting studs that replace minikits
+    "3-5",  # I managed only 40700/45000, even with 3 double jump slams to get 3 Blue Studs that were just too high.
+    # Dying is easy in multiple areas, where even without deaths, it is barely possible.
+    "3-6",
+    # It's pretty slow, but possible to overshoot by 20K studs while mostly wasting the two Power Ups. If it is possible
+    # to get 9/10 TIE Fighters in the Turbolaser control area towards the very end, then return to the previous room via
+    # the elevator, go back to the Turbolasers and destroy the last TIE Fighter before the Power Up runs out, then
+    # doubling the studs that spawn (around 20K) would be a huge benefit.
+    # "4-4",
+    # Possible to overshoot by 95K Studs, even without taking advantage of Power Ups, though it is slow, and a vehicle,
+    # level, so dying a lot is expected. Vehicle chapters also just kind of suck for picking up studs. 4-6 could be
+    # included in the difficult True Jedi if there are complaints.
+    # "4-6",
+    # Apparently barely possible by re-entering and getting studs that replace minikits. I find this vehicle chapter
+    # especially difficult to actually pick studs up off the ground, and dying is also easy in this chapter.
+    "5-1",
+    # I only managed 53K/80K without deaths, but while wasting Power Ups. Even with Power Ups, 5-2 is looking clearly
+    # impossible.
+    "5-2",
+    # If no studs are lost from dying and Power Ups are used to their fullest, then 5-6 is just barely possible
+    # without getting Minikit Blue Studs, but by only around 100-200 Studs.
+    "5-6",
+    # I am assuming that the extra room where the door needs to be blown up is required to get True Jedi in 6-5.
+    "6-5",
+}
+
 # TODO: Record Level IDs, these would mostly be there to help make map switching in the tracker easier, and would
 #  serve as a record of data that might be useful for others.
 CHAPTER_AREAS = [
-    # area -1/255 = Cantina
-    ChapterArea("Negotiations", 1, 1, 0x86E0F4, 7, 0),
-    ChapterArea("Invasion of Naboo", 1, 2, 0x86E100, 15, 1),
-    ChapterArea("Escape From Naboo", 1, 3, 0x86E10C, 24, 2),
-    ChapterArea("Mos Espa Pod Race", 1, 4, 0x86E118, 37, 3),
-    # area 4 = Bonus: Pod Race (Original)
-    ChapterArea("Retake Theed Palace", 1, 5, 0x86E130, 48, 5),
-    ChapterArea("Darth Maul", 1, 6, 0x86E13C, 55, 6),
+    # area -1/255 = Cantina, AreaData* index ??
+    ChapterArea("Negotiations", 1, 1, 0x86E0F4, 7, 0, 31000, 64000, 0),
+    ChapterArea("Invasion of Naboo", 1, 2, 0x86E100, 15, 1, 44000, 52000, 1),
+    ChapterArea("Escape From Naboo", 1, 3, 0x86E10C, 24, 2, 48000, 60000, 2),
+    ChapterArea("Mos Espa Pod Race", 1, 4, 0x86E118, 37, 3, 45000, 45000, 3),
+    # area 4 = Bonus: Pod Race (Original), AreaData* index 49
+    ChapterArea("Retake Theed Palace", 1, 5, 0x86E130, 48, 5, 60000, 100000, 4),
+    ChapterArea("Darth Maul", 1, 6, 0x86E13C, 55, 6, 31000, 64000, 5),
     # area 7 = EP1 Ending
-    # area 8 = EP1 Character Bonus
+    # area 8 = EP1 Character Bonus, AreaData* index 37
     # area 9 = EP1 Minikit Bonus. Episode Bonus doors show the Minikit Bonus Area ID rather than Character Bonus Area ID
-    ChapterArea("Bounty Hunter Pursuit", 2, 1, 0x86E16C, 68, 10),
-    ChapterArea("Discovery On Kamino", 2, 2, 0x86E178, 78, 11),
-    ChapterArea("Droid Factory", 2, 3, 0x86E184, 88, 12),
-    ChapterArea("Jedi Battle", 2, 4, 0x86E190, 92, 13),
-    ChapterArea("Gunship Cavalry", 2, 5, 0x86E19C, 95, 14),
-    # area 15 = Bonus: Gunship Cavalry (Original)
-    ChapterArea("Count Dooku", 2, 6, 0x86E1B4, 103, 16),
-    ChapterArea("Battle Over Coruscant", 3, 1, 0x86E1E4, 111, 20),
-    ChapterArea("Chancellor In Peril", 3, 2, 0x86E1F0, 121, 21),
-    ChapterArea("General Grievous", 3, 3, 0x86E1FC, 123, 22),
-    ChapterArea("Defense Of Kashyyyk", 3, 4, 0x86E208, 128, 23),
-    ChapterArea("Ruin Of The Jedi", 3, 5, 0x86E214, 134, 24),
-    ChapterArea("Darth Vader", 3, 6, 0x86E220, 139, 25),
+    # AreaData* index 43
+    ChapterArea("Bounty Hunter Pursuit", 2, 1, 0x86E16C, 68, 10, 35000, 45000, 6),
+    ChapterArea("Discovery On Kamino", 2, 2, 0x86E178, 78, 11, 50000, 65000, 7),
+    ChapterArea("Droid Factory", 2, 3, 0x86E184, 88, 12, 40000, 55000, 8),
+    ChapterArea("Jedi Battle", 2, 4, 0x86E190, 92, 13, 8000, 16000, 9),
+    ChapterArea("Gunship Cavalry", 2, 5, 0x86E19C, 95, 14, 30000, 40000, 10),
+    # area 15 = Bonus: Gunship Cavalry (Original), AreaData* index 51
+    ChapterArea("Count Dooku", 2, 6, 0x86E1B4, 103, 16, 10000, 22000, 11),
+    # area 17 = EP2 Ending
+    # area 18 = EP2 Character Bonus, AreaData* index 38
+    # area 19 = EP2 Minikit Bonus, AreaData* index 44
+    ChapterArea("Battle Over Coruscant", 3, 1, 0x86E1E4, 111, 20, 75000, 75000, 12),
+    ChapterArea("Chancellor In Peril", 3, 2, 0x86E1F0, 121, 21, 60000, 80000, 14),
+    ChapterArea("General Grievous", 3, 3, 0x86E1FC, 123, 22, 3300, 5000, 15),
+    ChapterArea("Defense Of Kashyyyk", 3, 4, 0x86E208, 128, 23, 65000, 90000, 16),
+    ChapterArea("Ruin Of The Jedi", 3, 5, 0x86E214, 134, 24, 35000, 75000, 17),
+    ChapterArea("Darth Vader", 3, 6, 0x86E220, 139, 25, 25000, 45000, 18),
     # area 26 = EP3 Ending
-    # area 27 = EP3 Character Bonus
-    # area 28 = EP3 Minikit Bonus
-    # area 29 = Bonus: A New Hope
-    ChapterArea("Secret Plans", 4, 1, 0x86E25C, 159, 30),
-    ChapterArea("Through The Jundland Wastes", 4, 2, 0x86E268, 167, 31),
-    ChapterArea("Mos Eisley Spaceport", 4, 3, 0x86E274, 177, 32),
-    ChapterArea("Rescue The Princess", 4, 4, 0x86E280, 185, 33),
-    ChapterArea("Death Star Escape", 4, 5, 0x86E28C, 192, 34),
-    ChapterArea("Rebel Attack", 4, 6, 0x86E298, 203, 35),
+    # area 27 = EP3 Character Bonus, AreaData* index 39
+    # area 28 = EP3 Minikit Bonus, AreaData* index 45
+    # area 29 = Bonus: A New Hope, AreaData* index 52
+    ChapterArea("Secret Plans", 4, 1, 0x86E25C, 159, 30, 28000, 40000, 19),
+    ChapterArea("Through The Jundland Wastes", 4, 2, 0x86E268, 167, 31, 60000, 90000, 20),
+    ChapterArea("Mos Eisley Spaceport", 4, 3, 0x86E274, 177, 32, 60000, 100000, 21),
+    ChapterArea("Rescue The Princess", 4, 4, 0x86E280, 185, 33, 60000, 80000, 22),
+    ChapterArea("Death Star Escape", 4, 5, 0x86E28C, 192, 34, 45000, 65000, 23),
+    ChapterArea("Rebel Attack", 4, 6, 0x86E298, 203, 35, 30000, 45000, 24),
     # area 36 = EP4 Ending
-    # area 37 = EP4 Character Bonus
-    # area 38 = EP4 Minikit Bonus
-    ChapterArea("Hoth Battle", 5, 1, 0x86E2C8, 219, 39),
-    ChapterArea("Escape From Echo Base", 5, 2, 0x86E2D4, 228, 40),
-    ChapterArea("Falcon Flight", 5, 3, 0x86E2E0, 236, 41),
-    ChapterArea("Dagobah", 5, 4, 0x86E2EC, 244, 42),
-    ChapterArea("Cloud City Trap", 5, 5, 0x86E2F8, 257, 43),  # 5-5 levels are after 5-6 levels for some reason.
-    ChapterArea("Betrayal Over Bespin", 5, 6, 0x86E304, 251, 44),
+    # area 37 = EP4 Character Bonus, AreaData* index 40
+    # area 38 = EP4 Minikit Bonus, AreaData* index 46
+    ChapterArea("Hoth Battle", 5, 1, 0x86E2C8, 219, 39, 25000, 35000, 25),
+    ChapterArea("Escape From Echo Base", 5, 2, 0x86E2D4, 228, 40, 40000, 80000, 26),
+    ChapterArea("Falcon Flight", 5, 3, 0x86E2E0, 236, 41, 30000, 48000, 27),
+    ChapterArea("Dagobah", 5, 4, 0x86E2EC, 244, 42, 52000, 72000, 28),
+    # 5-5 levels are after 5-6 levels for some reason.
+    ChapterArea("Cloud City Trap", 5, 5, 0x86E2F8, 257, 43, 14000, 22000, 29),
+    ChapterArea("Betrayal Over Bespin", 5, 6, 0x86E304, 251, 44, 34000, 60000, 30),
     # area 45 = EP5 Ending
-    # area 46 = EP5 Character Bonus
-    # area 47 = EP5 Minikit Bonus
-    ChapterArea("Jabba's Palace", 6, 1, 0x86E334, 271, 48),
-    ChapterArea("The Great Pit Of Carkoon", 6, 2, 0x86E340, 277, 49),
-    ChapterArea("Speeder Showdown", 6, 3, 0x86E34C, 279, 50),
-    ChapterArea("The Battle Of Endor", 6, 4, 0x86E358, 286, 51),
-    ChapterArea("Jedi Destiny", 6, 5, 0x86E364, 301, 52),
-    ChapterArea("Into The Death Star", 6, 6, 0x86E370, 297, 53),
+    # area 46 = EP5 Character Bonus, AreaData* index 41
+    # area 47 = EP5 Minikit Bonus, AreaData* index 47
+    ChapterArea("Jabba's Palace", 6, 1, 0x86E334, 271, 48, 43000, 60000, 31),
+    ChapterArea("The Great Pit Of Carkoon", 6, 2, 0x86E340, 277, 49, 50000, 65000, 32),
+    ChapterArea("Speeder Showdown", 6, 3, 0x86E34C, 279, 50, 55000, 70000, 33),
+    ChapterArea("The Battle Of Endor", 6, 4, 0x86E358, 286, 51, 90000, 110000, 34),
+    ChapterArea("Jedi Destiny", 6, 5, 0x86E364, 301, 52, 35000, 80000, 35),
+    ChapterArea("Into The Death Star", 6, 6, 0x86E370, 297, 53, 35000, 40000, 36),
     # area 54 = EP6 Ending
-    # area 55 = EP6 Character Bonus
-    # area 56 = EP6 Minikit Bonus
+    # area 55 = EP6 Character Bonus, AreaData* index 42
+    # area 56 = EP6 Minikit Bonus, AreaData* index 48
     # area 57 = Bonus: New Town
-    # area 58 = Bonus: Anakin's Flight
+    # area 58 = Bonus: Anakin's Flight, AreaData* index 50
     # area 59 = Bonus: Lego City
     # area 60 = Two Player Arcade
     # area 66 = Cantina
@@ -549,9 +595,9 @@ BONUS_AREAS = [
     # Could require: "Darth Vader" + "Stormtrooper" + "C-3PO"
     BonusArea("A New Hope (Bonus Level)", 0x86E249, 0x8, 150, 29, gold_bricks_required=20),
     BonusArea("LEGO City", 0x86E3B8, 0x1, 311, 59,
-              gold_bricks_required=10, ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
+              gold_bricks_required=10, completion_ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
     BonusArea("New Town", 0x86E3A0, 0x1, 309, 57,
-              gold_bricks_required=50, ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
+              gold_bricks_required=50, completion_ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
     # The bonus level was never completed, so there is just the trailer to watch (which can be skipped immediately).
     # No gold brick for watching the trailer, but it does unlock the shop slot for purchasing Indiana Jones in vanilla
     # todo: Add the Purchase Indiana Jones location.
@@ -579,6 +625,15 @@ STATUS_LEVEL_IDS = (
         {area.status_level_id for area in CHAPTER_AREAS} | {area.status_level_id for area in BONUS_AREAS
                                                             if area.status_level_id != -1}
 )
+AREA_ID_TO_BONUS_AREA = {area.area_id: area for area in BONUS_AREAS}
+
+VEHICLE_BONUS_AREA_NAMES: frozenset[str] = frozenset({
+    "Mos Espa Pod Race (Original)",
+    "Anakin's Flight",
+    "Gunship Cavalry (Original)",
+})
+
+assert all(name in BONUS_NAME_TO_BONUS_AREA for name in VEHICLE_BONUS_AREA_NAMES)
 
 VEHICLE_CHAPTER_SHORTNAMES: frozenset[str] = frozenset({
     "1-4",

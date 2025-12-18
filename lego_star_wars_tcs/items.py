@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING, ClassVar, Literal, Iterable, Mapping, AbstractSet
+from typing import Optional, ClassVar, Literal, Iterable, Mapping, AbstractSet
 
 from BaseClasses import Item, ItemClassification
 from .constants import (
@@ -18,11 +18,6 @@ from .constants import (
     VEHICLE_TIE,
     VEHICLE_TOW,
 )
-
-if TYPE_CHECKING:
-    from . import LegoStarWarsTCSWorld
-else:
-    LegoStarWarsTCSWorld = object
 
 
 ItemType = Literal["Character", "Vehicle", "Extra", "Generic", "Minikit"]
@@ -69,6 +64,12 @@ class GenericCharacterData(GenericItemData):
         _unlock_method, studs_cost = CHARACTER_SHOP_SLOTS.get(self.name, (..., 0))
         object.__setattr__(self, "purchase_cost", studs_cost)
 
+    @property
+    def purchase_location_name(self) -> str:
+        if self.shop_slot == -1:
+            raise RuntimeError(f"{self.name} has no shop slot, so cannot be purchased.")
+        return f"Purchase {self.name}"
+
 
 @dataclass(frozen=True)
 class CharacterData(GenericCharacterData):
@@ -91,6 +92,20 @@ class ExtraData(GenericItemData):
     def __post_init__(self):
         object.__setattr__(self, "shop_slot_byte", self.extra_number // 8)
         object.__setattr__(self, "shop_slot_bit_mask", 1 << (self.extra_number % 8))
+
+    @property
+    def purchase_location_name(self) -> str:
+        return f"Purchase {self.name}"
+
+
+@dataclass(frozen=True)
+class NonPowerBrickExtraData(ExtraData):
+    studs_cost: int
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.level_shortname is not None:
+            raise ValueError("NonPowerBrickExtraData should not have a level_shortname set.")
 
 
 # Purchasable characters and how they are unlocked, in the order they appear in the shop.
@@ -434,7 +449,7 @@ ITEM_DATA: list[GenericItemData] = [
     _extra(152, "Super Ewok Catapult", 0x29, "6-4"),
     _extra(153, "Infinite Torpedos", 0x2A, "6-6"),
     _extra(-1, "Score x10", 0x2B, "6-5"),
-    _generic(154, "All Episodes Token"),
+    _generic(154, "Episode Completion Token"),
     _generic(155, "Episode 1 Unlock"),
     _generic(156, "Episode 2 Unlock"),
     _generic(157, "Episode 3 Unlock"),
@@ -461,14 +476,14 @@ ITEM_DATA: list[GenericItemData] = [
     _char(176, "Qui-Gon Jinn", 104, abilities=JEDI),
     _char(177, "Obi-Wan Kenobi", 1, abilities=JEDI),
     _char(178, "TC-14", 71, abilities=PROTOCOL_DROID),
-    _extra(-1, "Extra Toggle", 0x0, None),
-    _extra(-1, "Fertilizer", 0x1, None),
-    _extra(-1, "Disguise", 0x2, None),
-    _extra(-1, "Daisy Chains", 0x3, None),
-    _extra(-1, "Chewbacca Carrying C-3PO", 0x4, None),
-    _extra(-1, "Tow Death Star", 0x5, None),
-    _extra(-1, "Silhouettes", 0x6, None),
-    _extra(-1, "Beep Beep", 0x7, None),
+    NonPowerBrickExtraData(179, "Extra Toggle", 0x0, None, 30000),
+    NonPowerBrickExtraData(180, "Fertilizer", 0x1, None, 8000),
+    NonPowerBrickExtraData(181, "Disguise", 0x2, None, 10000),
+    NonPowerBrickExtraData(182, "Daisy Chains", 0x3, None, 5000),
+    NonPowerBrickExtraData(183, "Chewbacca Carrying C-3PO", 0x4, None, 10000),
+    NonPowerBrickExtraData(184, "Tow Death Star", 0x5, None, 5000),
+    NonPowerBrickExtraData(185, "Silhouettes", 0x6, None, 10000),
+    NonPowerBrickExtraData(186, "Beep Beep", 0x7, None, 7500),
     _extra(-1, "Adaptive Difficulty", 0x2C, None),  # Effectively a difficulty setting, so not randomized.
     # Custom characters can only use unlocked character equipment, besides some blasters. They do not get access to
     # lightsabers/force unless Jedi are unlocked.
@@ -486,10 +501,19 @@ ITEM_DATA: list[GenericItemData] = [
     MinikitItemData(199, "Minikit", 1),
     MinikitItemData(200, "2 Minikits", 2),
     MinikitItemData(201, "10 Minikits", 10),
+    _generic(202, "Power Up"),
+    _generic(203, "Kyber Brick"),
+    _generic(204, "Silver Stud"),
+    _generic(205, "Gold Stud"),
+    _generic(206, "Blue Stud"),
 
     # "Extra Toggle" characters.
     _char(-1, "Womp Rat", 165),
     _char(-1, "Skeleton", 231),
+
+    # Miscellaneous vehicles.
+    # This is the vehicle present in the outside area of the Cantina. 'map' is the internal name for the Cantina.
+    _char(-1, "mapcar", 303),
 ]
 
 USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
@@ -516,6 +540,9 @@ USEFUL_NON_PROGRESSION_CHARACTERS: set[str] = {
 ITEM_DATA_BY_NAME: Mapping[str, GenericItemData] = {data.name: data for data in ITEM_DATA}
 ITEM_DATA_BY_ID: Mapping[int, GenericItemData] = {data.code: data for data in ITEM_DATA if data.is_sendable}
 EXTRAS_BY_NAME: Mapping[str, ExtraData] = {data.name: data for data in ITEM_DATA if isinstance(data, ExtraData)}
+PURCHASABLE_NON_POWER_BRICK_EXTRAS: tuple[NonPowerBrickExtraData, ...] = tuple(
+    [extra for extra in EXTRAS_BY_NAME.values() if isinstance(extra, NonPowerBrickExtraData)]
+)
 CHARACTERS_AND_VEHICLES_BY_NAME: Mapping[str, GenericCharacterData] = {data.name: data for data in ITEM_DATA
                                                                        if isinstance(data, GenericCharacterData)}
 GENERIC_BY_NAME: Mapping[str, GenericItemData] = {data.name: data for data in ITEM_DATA if data.item_type == "Generic"}
@@ -528,6 +555,6 @@ AP_NON_VEHICLE_CHARACTER_INDICES: AbstractSet[int] = {char.character_index
                                                       for char in NON_VEHICLE_CHARACTER_BY_INDEX.values()
                                                       if char.is_sendable}
 
-ITEM_NAME_TO_ID: Mapping[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.is_sendable}
+ITEM_NAME_TO_ID: dict[str, int] = {name: item.code for name, item in ITEM_DATA_BY_NAME.items() if item.is_sendable}
 
 MINIKITS_BY_COUNT: Mapping[int, GenericItemData] = {bundle.bundle_size: bundle for bundle in MINIKITS_BY_NAME.values()}

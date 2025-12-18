@@ -1,8 +1,14 @@
+import json
 from enum import auto, IntFlag
+from pkgutil import get_data
 
-GAME_NAME = "Lego Star Wars: The Complete Saga"
+_MANIFEST = json.loads(get_data("worlds.lego_star_wars_tcs", "archipelago.json"))
 
-AP_WORLD_VERSION: tuple[int, int, int] = (1, 1, 3)
+GAME_NAME = _MANIFEST["game"]
+
+_MAJOR, _MINOR, _PATCH = map(int, _MANIFEST["world_version"].split("."))
+AP_WORLD_VERSION: tuple[int, int, int] = (_MAJOR, _MINOR, _PATCH)
+del _MANIFEST
 
 
 # todo: These are the abilities from the manual logic, not the real abilities.

@@ -1,7 +1,7 @@
 import itertools
 from typing import ClassVar, TypedDict
 
-from BaseClasses import Location
+from BaseClasses import Location, Region
 
 from .constants import GAME_NAME
 
@@ -604,12 +604,12 @@ LOCATION_NAME_TO_ID = {
     "Purchase Score x6 (5-5)": 544,
     "Purchase Score x8 (6-3)": 545,
     "Purchase Score x10 (6-5)": 546,
-    "Mos Espa Pod Race (Original)": 547,
-    "Anakin's Flight": 548,
-    "Gunship Cavalry (Original)": 549,
-    "A New Hope (Bonus Level)": 550,
-    "LEGO City": 551,
-    "New Town": 552,
+    "Mos Espa Pod Race (Original) Completion": 547,
+    "Anakin's Flight Completion": 548,
+    "Gunship Cavalry (Original) Completion": 549,
+    "A New Hope (Bonus Level) Completion": 550,
+    "LEGO City Completion": 551,
+    "New Town Completion": 552,
     "Indiana Jones: Trailer": 553,
     "Purchase Indiana Jones": 554,
     "Purchase Princess Leia (Prisoner)": 555,
@@ -679,8 +679,51 @@ LOCATION_NAME_TO_ID = {
     "Chapter Completion - Unlock Han Solo (Endor)": 619,
     "Chapter Completion - Unlock Wicket": 620,
     "Chapter Completion - Unlock Darth Vader": 621,
+    "Ride STAP": 622,
+    "Ride Landspeeder": 623,
+    "Ride Wookie Flyer": 624,
+    "Ride Dewback": 625,
+    "Ride Moon Car": 626,
+    "Ride Lifeboat": 627,
+    "Ride Firetruck": 628,
+    "Ride Basketball Cannon": 629,
+    "Ride Clone Walker": 630,
+    "Ride Cloud Car": 631,
+    "Ride Tauntaun": 632,
+    "Ride Town Car": 633,
+    "Ride Tractor": 634,
+    "Ride Bantha": 635,
+    "Ride AT-ST": 636,
+    "Ride Service Car": 637,
+    "Ride Flash Speeder": 638,
+    "Ride Crane Control": 639,
+    "Ride Mos Eisley Cannon": 640,
+    "Ride Stormtrooper Cannon": 641,
+    "Ride Snowmobile": 642,
+    "Ride Ewok Catapult": 643,
+    "Ride Skiff Cannon": 644,
+    "Ride Big Skiff Cannon": 645,
+    "Ride Cantina Car": 646,
+    "Ride Speeder Bike": 647,
+    "Ride AT-AT": 648,
+    "Purchase Extra Toggle": 649,
+    "Purchase Fertilizer": 650,
+    "Purchase Disguise": 651,
+    "Purchase Daisy Chains": 652,
+    "Purchase Chewbacca Carrying C-3PO": 653,
+    "Purchase Tow Death Star": 654,
+    "Purchase Silhouettes": 655,
+    "Purchase Beep Beep": 656,
 }
 
 
 class LegoStarWarsTCSLocation(Location):
     game = GAME_NAME
+
+
+class LegoStarWarsTCSShopLocation(LegoStarWarsTCSLocation):
+    studs_cost: int
+
+    def __init__(self, player: int, name: str, address: int, parent: Region, studs_cost: int):
+        super().__init__(player, name, address, parent)
+        self.studs_cost = studs_cost

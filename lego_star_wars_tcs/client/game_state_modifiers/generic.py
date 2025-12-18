@@ -1,6 +1,7 @@
 import logging
-from typing import Mapping, Sequence, AbstractSet, Any
+from typing import Mapping, Sequence, AbstractSet
 
+from ..events import subscribe_event, OnReceiveSlotDataEvent
 from ..type_aliases import TCSContext
 from ...items import (
     GENERIC_BY_NAME,
@@ -11,14 +12,21 @@ from ...items import (
 )
 from . import ItemReceiver
 
+
+_SEPARATELY_HANDLED_GENERIC = {
+    "Purple Stud",
+    "Power Up"
+}
 RECEIVABLE_GENERIC_BY_AP_ID: Mapping[int, GenericItemData] = {
-    item.code: item for item in GENERIC_BY_NAME.values() if item.code != -1 and not item.name.endswith("Stud")
+    item.code: item for item in GENERIC_BY_NAME.values()
+    if item.code != -1 and item.name not in _SEPARATELY_HANDLED_GENERIC
 }
 EPISODE_UNLOCKS: Mapping[int, int] = {
     GENERIC_BY_NAME[f"Episode {i} Unlock"].code: i for i in range(1, 6+1)
 }
-ALL_EPISODES_TOKEN: int = GENERIC_BY_NAME["All Episodes Token"].code
+ALL_EPISODES_TOKEN: int = GENERIC_BY_NAME["Episode Completion Token"].code
 PROGRESSIVE_SCORE_MULTIPLIER: int = GENERIC_BY_NAME["Progressive Score Multiplier"].code
+KYBER_BRICK: int = GENERIC_BY_NAME["Kyber Brick"].code
 SCORE_MULIPLIER_EXTRAS: Sequence[ExtraData] = (
     EXTRAS_BY_NAME["Score x2"],
     EXTRAS_BY_NAME["Score x4"],
@@ -36,9 +44,6 @@ BONUS_CHARACTER_REQUIREMENTS: Mapping[int, AbstractSet[int]] = {
 }
 
 BONUSES_BASE_ADDRESS = 0x86E4E4
-
-# Goal progress is written into Custom Character 2's name until a better place for this information is found.
-CUSTOM_CHARACTER2_NAME_OFFSET = 0x86E524 + 0x14  # string[15]
 
 
 logger = logging.getLogger("Client")
@@ -93,19 +98,22 @@ class AcquiredGeneric(ItemReceiver):
     receivable_ap_ids = RECEIVABLE_GENERIC_BY_AP_ID
 
     received_episode_unlocks: set[int]
-    all_episodes_token_counts: int = 0
+    episode_completion_token_count: int = 0
     progressive_score_count: int = 0
+    kyber_brick_count: int = 0
 
     def __init__(self):
         self.received_episode_unlocks = set()
 
-    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
+    @subscribe_event
+    def init_from_slot_data(self, _event: OnReceiveSlotDataEvent) -> None:
         self.clear_received_items()
 
     def clear_received_items(self) -> None:
         self.received_episode_unlocks.clear()
-        self.all_episodes_token_counts = 0
+        self.episode_completion_token_count = 0
         self.progressive_score_count = 0
+        self.kyber_brick_count = 0
 
     @property
     def current_score_multiplier(self):
@@ -120,14 +128,14 @@ class AcquiredGeneric(ItemReceiver):
             self.progressive_score_count += 1
         # 'All Episodes' tokens
         elif ap_item_id == ALL_EPISODES_TOKEN:
-            self.all_episodes_token_counts += 1
+            self.episode_completion_token_count += 1
         # Episode Unlocks
         elif ap_item_id in EPISODE_UNLOCKS:
             self.received_episode_unlocks.add(EPISODE_UNLOCKS[ap_item_id])
-            ctx.unlocked_chapter_manager.on_character_or_episode_unlocked(ap_item_id)
+            ctx.unlocked_chapter_manager.on_character_or_episode_unlocked(ctx, ap_item_id)
+        # Kyber Brick goal items
+        elif ap_item_id == KYBER_BRICK:
+            self.kyber_brick_count += 1
+            ctx.goal_manager.tag_for_update("kyber brick")
         else:
             logger.error("Unhandled ap_item_id %s for generic item", ap_item_id)
-
-    async def update_game_state(self, ctx: TCSContext):
-        # Bonus level doors unlock as per vanilla, which is having enough Gold Bricks.
-        pass

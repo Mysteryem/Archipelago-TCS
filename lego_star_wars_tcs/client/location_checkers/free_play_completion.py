@@ -1,33 +1,65 @@
 import logging
-from typing import Any, Iterable
+from enum import IntFlag
+from typing import Iterable
 
-from ...levels import CHAPTER_AREAS, ChapterArea, AREA_ID_TO_CHAPTER_AREA
+from ..events import subscribe_event, OnReceiveSlotDataEvent
+from ...levels import CHAPTER_AREAS, ChapterArea
 from ...locations import LOCATION_NAME_TO_ID, LEVEL_COMMON_LOCATIONS
 from ..type_aliases import ApLocationId, LevelId, TCSContext, AreaId
 from ..common import ClientComponent
+from ..common_addresses import ChallengeMode
 
 
 debug_logger = logging.getLogger("TCS Debug")
 
 
-# The most stable byte I could find to determine the difference between the 'status' screen when using "Save and Exit
-# Cantina" and when completing a chapter, in Free Play. What this byte controls is unknown.
-# Seems to always be 0x8 when using "Save and Quit", and 0x0 when completing a chapter. Can be 0x8 when playing
-# through a normal chapter with control of a character.
-STATUS_LEVEL_TYPE_ADDRESS = 0x87A6D9
-# STATUS_LEVEL_TYPE_SAVE_AND_EXIT = 0x8
-STATUS_LEVEL_TYPE_LEVEL_COMPLETION = 0x0
+# Flags set when on the Status screen.
+STATUS_LEVEL_FLAGS_ADDRESS = 0x87A6D8
 
 
-CURRENT_GAME_MODE_ADDRESS = 0x87951C
-"""Byte that stores the current game mode."""
+class StatusLevelFlags(IntFlag):
+    UNKNOWN_1 = 0x1
+    UNKNOWN_2 = 0x2
+    # todo: See if completing Story True Jedi vs Free Play True Jedi have different flags.
+    TRUE_JEDI_COMPLETED = 0x4  # Upon getting the True Jedi Gold Brick
+    STORY_MODE = 0x8
+    MINIKITS_COMPLETED = 0x10  # Upon getting the 10/10 Minikits Gold Brick
+    UNKNOWN_20 = 0x20
+    CHARACTER_SWAP_ENABLED = 0x40  # Free Play/Challenge/Character Bonus/Minikit Bonus
+    VEHICLE_LEVEL = 0x80  # Minikit Bonus also counts as a vehicle level
+    CHARACTER_OR_MINIKIT_BONUS = 0x100
+    UNKNOWN_200 = 0x200  # todo: This appears to be set for 'collect all studs' bonus levels, (LEGO City + New Town)
+    SUPERSTORY = 0x400
+    SAVE_AND_QUIT = 0x800
+    # Story related. This bit gets set when exiting back to the cantina from Story mode, but only after a delay.
+    UNKNOWN_1000 = 0x1000
 
-# CURRENT_GAME_MODE_STORY = 0
-CURRENT_GAME_MODE_FREE_PLAY = 1
-# Per-chapter Challenge mode as well as per-episode character bonus and Superstory.
-# TODO: What do vehicle bonuses and separate bonus levels count as? Separate bonus levels can have both Story and Free
-#  Play modes (Anakin's Flight), but can also be only Free Play (New Town).
-# CURRENT_GAME_MODE_CHALLENGE_BONUS = 2
+
+# Free Play level completion therefore requires:
+STATUS_LEVEL_FREE_PLAY_COMPLETION_REQUIREMENTS = int(StatusLevelFlags.CHARACTER_SWAP_ENABLED)
+# Does not care about:
+# STATUS_LEVEL_FREE_PLAY_COMPLETION_IGNORES = int(
+#         StatusLevelFlags.TRUE_JEDI_COMPLETED
+#         | StatusLevelFlags.MINIKITS_COMPLETED
+#         | StatusLevelFlags.VEHICLE_LEVEL
+# )
+# Must not have:
+STATUS_LEVEL_FREE_PLAY_COMPLETION_NEGATIVE_REQUIREMENTS = int(
+    StatusLevelFlags.STORY_MODE
+    | StatusLevelFlags.CHARACTER_OR_MINIKIT_BONUS
+    | StatusLevelFlags.SUPERSTORY
+    | StatusLevelFlags.SAVE_AND_QUIT
+)
+# # Unknown:
+# STATUS_LEVEL_FREE_PLAY_COMPLETION_UNKNOWN = int(
+#     StatusLevelFlags.UNKNOWN_1
+#     | StatusLevelFlags.UNKNOWN_2
+#     | StatusLevelFlags.UNKNOWN_20
+#     | StatusLevelFlags.UNKNOWN_200
+#     | StatusLevelFlags.UNKNOWN_1000
+# )
+# These status level flags are not enough to tell apart Free Play and Challenge mode, so an additional explicitl check
+# for Challenge mode needs to be performed.
 
 
 STATUS_LEVEL_ID_TO_AP_ID: dict[LevelId, ApLocationId] = {
@@ -42,25 +74,21 @@ AP_ID_TO_AREA: dict[ApLocationId, ChapterArea] = {
 }
 
 
-def is_in_free_play(ctx: TCSContext) -> bool:
+def is_status_level_free_play_completion(ctx: TCSContext) -> bool:
     """
-    Return whether the player is currently in Free Play.
-
-    The result is undefined if the player is not currently in a chapter Area.
-    """
-    return ctx.read_uchar(CURRENT_GAME_MODE_ADDRESS) == CURRENT_GAME_MODE_FREE_PLAY
-
-
-def is_status_level_completion(ctx: TCSContext) -> bool:
-    """
-    Return whether the current status Level is being shown as part of chapter completion.
+    Return whether the current status Level is being shown as part of chapter completion in Free Play.
 
     The status Level for each chapter Area is used when tallying up Studs/Minikits etc. when returning to the
     Cantina, both for chapter completion and for 'Save and Exit'.
 
     The result is undefined if the player is not currently in a status Level.
     """
-    return ctx.read_uchar(STATUS_LEVEL_TYPE_ADDRESS) == STATUS_LEVEL_TYPE_LEVEL_COMPLETION
+    status_flags = ctx.read_uint(STATUS_LEVEL_FLAGS_ADDRESS)
+    return (status_flags & STATUS_LEVEL_FREE_PLAY_COMPLETION_REQUIREMENTS != 0
+            and status_flags & STATUS_LEVEL_FREE_PLAY_COMPLETION_NEGATIVE_REQUIREMENTS == 0
+            # The status_flags cannot be used to tell apart Free Play and Challenge, so an explicit check for Challenge
+            # mode not being enabled is needed.
+            and ChallengeMode.NO_CHALLENGE.is_set(ctx))
 
 
 # TODO: How quickly can a player reasonably skip through the chapter completion screen? Do we need to check for chapter
@@ -88,7 +116,9 @@ class FreePlayChapterCompletionChecker(ClientComponent):
         self.initial_setup_complete = False
         self.chapter_completion_locations = {}
 
-    def init_from_slot_data(self, ctx: TCSContext, slot_data: dict[str, Any]) -> None:
+    @subscribe_event
+    def init_from_slot_data(self, event: OnReceiveSlotDataEvent) -> None:
+        ctx = event.context
         enabled_chapter_areas: set[AreaId] = set()
         for area in CHAPTER_AREAS:
             chapter_locations = [STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id]]
@@ -122,6 +152,8 @@ class FreePlayChapterCompletionChecker(ClientComponent):
                 debug_logger.info("Read from save file that %s has been completed in Free Play", area.short_name)
                 self.sent_locations.add(STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id])
                 completed_area_ids.append(area_id)
+                # Tell the goal manager it should update for newly completed chapters.
+                ctx.goal_manager.tag_for_update("area")
         ctx.update_datastorage_free_play_completion(completed_area_ids)
         ctx.goal_manager.tag_for_update("boss")
 
@@ -132,6 +164,8 @@ class FreePlayChapterCompletionChecker(ClientComponent):
             ctx.goal_manager.tag_for_update("boss")
             # The locations should have been sent already, but try sending again just in-case.
             self.sent_locations.update(self.chapter_completion_locations.get(area_id, ()))
+            # Tell the goal manager it should update for newly completed chapters.
+            ctx.goal_manager.tag_for_update("area")
 
     async def initialize(self, ctx: TCSContext):
         if not self.initial_setup_complete:
@@ -140,15 +174,14 @@ class FreePlayChapterCompletionChecker(ClientComponent):
 
     async def check_completion(self, ctx: TCSContext, new_location_checks: list[ApLocationId]):
 
-        # Level ID should be checked first because STATUS_LEVEL_TYPE_ADDRESS can be STATUS_LEVEL_TYPE_LEVEL_COMPLETION
-        # during normal gameplay, so it would be possible for STATUS_LEVEL_TYPE_ADDRESS to match and then the player
-        # does 'Save and Exit', changing the Level ID to a 'status' level and accidentally sending a location check.
+        # Level ID should be checked first because STATUS_LEVEL_FLAGS_ADDRESS only gets set when entering a Status
+        # level, and its value will persist in memory until it is set again.
         current_level_id = ctx.read_current_level_id()
         completion_location_id = STATUS_LEVEL_ID_TO_AP_ID.get(current_level_id)
         if completion_location_id is not None:
             area = STATUS_LEVEL_ID_TO_AREA[current_level_id]
             area_id = area.area_id
-            if area_id not in self.completed_free_play and is_in_free_play(ctx) and is_status_level_completion(ctx):
+            if area_id not in self.completed_free_play and is_status_level_free_play_completion(ctx):
                 completion_locations = self.chapter_completion_locations.get(area.area_id, ())
                 self.sent_locations.update(completion_locations)
                 ctx.update_datastorage_free_play_completion([area_id])
