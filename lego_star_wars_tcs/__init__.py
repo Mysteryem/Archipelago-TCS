@@ -696,7 +696,7 @@ class LegoStarWarsTCSWorld(World):
                     extra_required_items.append(f"Episode {i} Unlock")
         if self.options.all_episodes_character_purchase_requirements == "episodes_tokens":
             # One token is added to the item pool for every episode's worth of (6) chapters that are enabled.
-            tokens_in_pool = max(1, round(len(self.enabled_episodes) / 6))
+            tokens_in_pool = max(1, round(len(self.enabled_chapters) / 6))
             start_inventory_tokens = 6 - tokens_in_pool
             assert 5 >= start_inventory_tokens >= 0
             for _ in range(tokens_in_pool):

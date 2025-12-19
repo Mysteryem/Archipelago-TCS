@@ -1029,9 +1029,13 @@ class FillerWeightJunk(Range):
 class JunkWeights(ItemDict):
     """Control the weight of each Junk Filler item.
 
-    If all weight are set to zero, all Junk will be Purple Studs.
+    If all weight are set to zero, all Junk will be Blue Studs.
 
     Purple Studs give 10000 Studs when received.
+    Blue Studs give 1000 Studs when received.
+    Gold Studs give 100 Studs when received.
+    Silver Studs give 10 Studs when received.
+    Received studs are multiplied by unlocked Score Multipliers and any active Power Up.
 
     Power Up items give 20 seconds of invincibility, 2x score multiplier and a number of other beneficial effects.
     Power Up items will not be used while in the Cantina, LEGO City, New Town or Battle Over Coruscant (3-1).

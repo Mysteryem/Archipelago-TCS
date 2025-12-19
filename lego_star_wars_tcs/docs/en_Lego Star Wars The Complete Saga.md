@@ -15,12 +15,12 @@ The player always starts with the items necessary to enter their starting Chapte
 ## What items and locations get randomized?
 
 ### Items
-Characters, Extras (that require a Power Brick) and Minikits are in the item pool.
+Characters, Extras and Minikits are in the item pool.
 
 Score Multiplier Extras are replaced with Progressive Score Multiplier items that unlock more Score Multiplier Extras
 the more Progressive Score Multipliers are acquired.
 
-Purple Stud and Power Up items are added to the item pool to fill out the rest of the item pool.
+Stud and Power Up items are added to the item pool to fill out the rest of the item pool.
 
 ### Locations
 
@@ -35,6 +35,8 @@ Completing the True Jedi for a Chapter can be a location to check.
 Every 1-10 number of Minikits collected in a Chapter can be a check.
 
 Completing Bonus levels and watching the Indiana Jones trailer can be locations to check.
+
+Riding unique creatures/turrets/vehicles can be locations to check.
 
 ## What other changes are made to the game?
 
@@ -53,17 +55,22 @@ All items display as they would in vanilla.
 The item is immediately added to your unlocked Extras/Characters/Stud count. A text display in-game may show what the
 received item was.
 
-Studs are added to your in-level studs if you are a Chapter in Free Play, otherwise the sutds are added directly to your
+Studs are added to your in-level studs if you are a Chapter in Free Play, otherwise the studs are added directly to your
 save file's total accumulated Studs. The received studs are multiplied by your maximum possible score multiplier and
 multiplied by a further 2x for characters with a Power Up active (double score zones do not affect received studs
 currently).
+
+Power Ups automatically activate while in a level where Power Ups are relevant. Additional Power Ups will queue up, but
+all queued Power Ups will be lost once the current game session ends.
 
 ## Can I play offline?
 
 No, a connection to the Archipelago server is required to receive items, even in a single-player multiworld.
 
-If the connection to the Archipelago server is lost temporarily, it is possible to continue playing. Any checked
-locations while disconnected will be sent once the connection is reestablished.
+If the connection to the Archipelago server is lost temporarily, it is possible to continue playing. Most checked
+locations while disconnected will be sent once the connection is reestablished. Some location types that are sent by
+performing actions that do not get recorded into save data require a connection to the Archipelago server while
+performing that action.
 
 ## Known Issues
 
@@ -117,15 +124,15 @@ When attempting to purchase a Character/Extra that has already been unlocked, by
 Archipelago, there may be a small delay before the purchase will be allowed because the client has to temporarily
 disable that character to allow the purchase to go through.
 
-### Purple Studs
+### Studs
 
-When in the Cantina, receiving a Purple Stud item adds the studs directly to your save data, the stud counter shared by
-both players that is only visible while in the Cantina.
+When in the Cantina, receiving a Stud item adds the studs directly to your save data, the stud counter shared by both
+players that is only visible while in the Cantina.
 
-Receiving a Purple Stud while in a level will add it to your in-level stud count, contributing to True Jedi progress.
+Receiving a Stud while in a level will add it to your in-level stud count, contributing to True Jedi progress.
 
-Receiving a Purple Stud while under the effect of a Power Up will double the received studs.
-However, receiving a Purple Stud while in a Double Score Zone will not currently double the received studs.
+Receiving a Stud while under the effect of a Power Up will double the received studs.
+However, receiving a Stud while in a Double Score Zone will not currently double the received studs.
 
 ## Credits
 
