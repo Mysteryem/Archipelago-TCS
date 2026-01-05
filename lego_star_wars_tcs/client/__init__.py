@@ -2,7 +2,6 @@ import asyncio
 import traceback
 import colorama
 import hashlib
-import random
 
 import ModuleUpdate
 import Utils
@@ -18,12 +17,13 @@ import typing
 from pymem import pymem
 from pymem.exception import ProcessNotFound, ProcessError, PymemError, WinAPIError
 
-from CommonClient import CommonContext, server_loop, gui_enabled, ClientCommandProcessor
+from CommonClient import server_loop, gui_enabled
 
 from .. import options
 from ..constants import GAME_NAME, AP_WORLD_VERSION
 from ..levels import SHORT_NAME_TO_CHAPTER_AREA, CHAPTER_AREAS, ChapterArea
 from ..locations import LOCATION_NAME_TO_ID
+from .client_text import ClientText, clean_string
 from .common_addresses import ShopType, CantinaRoom, GameState1, OPENED_MENU_DEPTH_ADDRESS, CURRENT_P_AREA_DATA_ADDRESS
 from .location_checkers.free_play_completion import FreePlayChapterCompletionChecker
 from .location_checkers.bonus_level_completion import BonusAreaCompletionChecker
@@ -48,10 +48,24 @@ from .game_state_modifiers.goal_manager import GoalManager
 from .game_state_modifiers.levels import UnlockedChapterManager
 from .game_state_modifiers.minikits import AcquiredMinikits
 from .game_state_modifiers.power_ups import PowerUpReceiver
+from .game_state_modifiers.shop_names_replacer import ShopNamesReplacer
 from .game_state_modifiers.studs import STUDS_AP_ID_TO_VALUE, give_studs_item
 from .game_state_modifiers.text_display import InGameTextDisplay
 from .game_state_modifiers.text_replacer import TextReplacer
 from .game_state_modifiers.uncap_high_jump import UncapHighJump
+
+
+# Universal Tracker client integration.
+try:
+    from worlds.tracker.TrackerClient import (
+        TrackerGameContext as CommonContext,
+        TrackerCommandProcessor as ClientCommandProcessor,
+    )
+except ImportError as ex:
+    from CommonClient import CommonContext, ClientCommandProcessor
+    UNIVERSAL_TRACKER_LOADED = False
+else:
+    UNIVERSAL_TRACKER_LOADED = True
 
 
 logger = logging.getLogger("Client")
@@ -283,13 +297,32 @@ class LegoStarWarsTheCompleteSagaCommandProcessor(ClientCommandProcessor):
     def __init__(self, ctx: CommonContext):
         super().__init__(ctx)
 
+    def _cmd_color_test(self):
+        """
+        Test text color choices. You need to be connected to a server to use this command.
+
+        A number of these colors are probably reading parts of the game's memory that are not supposed to be colors. If
+        some of these colors display the wrong color while playing, please report that as an issue in the discord thread
+        for Lego Star Wars: The Complete Saga.
+        """
+        ctx = self.ctx
+        if isinstance(ctx, LegoStarWarsTheCompleteSagaContext):
+            if ctx.last_connected_slot is None or not ctx.is_in_game():
+                logger.info("Load into the game and connect to a server first.")
+                return
+            from ..options import TextColorChoice
+            for value, name in TextColorChoice.name_lookup.items():
+                msg = ctx.client_text.from_text_color_choice(TextColorChoice(value), name)
+                ctx.text_display.queue_message(msg)
+            logger.info("Demonstrating text color choices.")
+
     def _cmd_toggle_death_link(self):
         """Toggle Death Link on/off. Whether Death Link is enabled is stored in your save data, so the client will
         remember if Death Link was toggled the next time you connect."""
         ctx = self.ctx
         if isinstance(ctx, LegoStarWarsTheCompleteSagaContext):
             if ctx.last_connected_slot is None or not ctx.is_in_game():
-                logger.info("Load into a game and connect first.")
+                logger.info("Load into the game and connect to a server first.")
                 return
             ctx.death_link_manager.toggle_death_link(ctx)
             if ctx.death_link_manager.death_link_enabled:
@@ -302,6 +335,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     command_processor = LegoStarWarsTheCompleteSagaCommandProcessor
     game = GAME_NAME
     items_handling = 0b111  # Fully remote
+
+    # Need to override Universal Tracker's "Tracker" tag, otherwise it sets self.game = "" when disconnecting.
+    tags = set()
 
     # Copied from BizHawkClientContext
     server_seed_name: str | None = None
@@ -348,11 +384,13 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     death_link_manager: DeathLinkManager
     uncap_high_jump: UncapHighJump
     cantina_reloader: CantinaReloader
+    shop_names_replacer: ShopNamesReplacer
 
     # Customizable client behaviour
     received_item_messages: options.ReceivedItemMessages = options.ReceivedItemMessages(
         options.ReceivedItemMessages.option_all)
     checked_location_messages: bool = True
+    client_text: ClientText
 
     # A few components are permanent and will need to be manually re-subscribed to receive events because the components
     # won't be re-created.
@@ -376,12 +414,14 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # subscribing to events on the other attributes.
         self.event_manager = EventManager()
 
+        self.client_text = ClientText()
         self.text_display = InGameTextDisplay()
         self.uncap_high_jump = UncapHighJump()
         self.cantina_reloader = CantinaReloader()
         self.permanent_components = (self.text_display, self.uncap_high_jump, self.cantina_reloader)
 
         self.death_link_manager = DeathLinkManager()
+        self.shop_names_replacer = ShopNamesReplacer()
 
         # It is not ideal to leak `self` in __init__. The TextReplacer methods could be updated to include a TCSContext
         # parameter if needed, instead of leaking `self`. Alternatively, the TextReplacer could be created only when
@@ -422,11 +462,13 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             item = args["item"]
             recipient = args["receiving"]
 
-            is_progression = ItemClassification.progression in ItemClassification(item.flags)
+            classification = ItemClassification(item.flags)
+            is_progression = ItemClassification.progression in classification
 
             # Receiving an item from the server
             if self.slot_concerns_self(recipient):
                 item_name = self.item_names.lookup_in_game(item.item)
+                item_str = self.client_text.from_classification(classification, clean_string(item_name))
                 if self.slot_concerns_self(item.player):
                     # This counts as both a checked location and a received item.
                     if (
@@ -435,28 +477,35 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                                 (is_progression or self.received_item_messages == "all"))
                     ):
                         location_name = self.location_names.lookup_in_game(item.location)
-                        message = f"Found {item_name} ({location_name})"
+                        location_str = self.client_text.location_name(clean_string(location_name))
+                        message = f"Found {item_str} ({location_str})"
                         self.text_display.queue_message(message)
                 else:
                     if self.received_item_messages and (is_progression or self.received_item_messages == "all"):
                         finder = self.player_names[item.player]
+                        finder_str = self.client_text.player_name(clean_string(finder))
                         location_name = self.location_names.lookup_in_slot(item.location, item.player)
-                        message = f"Received {item_name} from {finder} ({location_name})"
+                        location_str = self.client_text.location_name(clean_string(location_name))
+                        message = f"Received {item_str} from {finder_str} ({location_str})"
                         self.text_display.queue_message(message)
             # Sending an item to the server.
             elif self.slot_concerns_self(item.player):
                 item_name = self.item_names.lookup_in_slot(item.item, recipient)
+                item_str = self.client_text.from_classification(classification, clean_string(item_name))
 
                 if self.slot_concerns_self(recipient):
                     # Should not happen?
                     location_name = self.location_names.lookup_in_game(item.location)
-                    message = f"Sent {item_name}...to myself? ({location_name}) Please report this."
+                    location_str = self.client_text.location_name(clean_string(location_name))
+                    message = f"Sent {item_str}...to myself? ({location_str}) Please report this."
                     self.text_display.queue_message(message)
                 else:
                     if self.checked_location_messages:
                         owner = self.player_names[recipient]
+                        owner_str = self.client_text.player_name(clean_string(owner))
                         location_name = self.location_names.lookup_in_game(item.location)
-                        message = f"Sent {item_name} to {owner} ({location_name})"
+                        location_str = self.client_text.location_name(clean_string(location_name))
+                        message = f"Sent {item_str} to {owner_str} ({location_str})"
                         self.text_display.queue_message(message)
 
     @staticmethod
@@ -516,6 +565,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         # The connection to the server is assumed to be OK by this point, so slot_data can now be used to adjust client
         # behaviour.
         received_item_messages = slot_data["received_item_messages"]
+
+        self.client_text = ClientText.from_slot_data(slot_data)
 
         on_receive_slot_data_event = OnReceiveSlotDataEvent(self, slot_data, first_time_setup)
         generator_apworld_version = on_receive_slot_data_event.generator_version
@@ -695,6 +746,8 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             completed_minikit_goal = keys.get(self._get_datastorage_key(MINIKIT_GOAL_SUBMITTED_PREFIX))
             if completed_minikit_goal:
                 self.goal_manager.complete_minikit_goal_from_datastorage(self)
+        elif cmd == "RoomUpdate":
+            self.shop_names_replacer.update_player_names(self)
 
     def on_deathlink(self, data: typing.Dict[str, typing.Any]) -> None:
         text = data.get("cause", "")
@@ -762,23 +815,12 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
         """Return whether a location exists according to server state."""
         return location_id not in self.disabled_locations
 
-    def run_gui(self):
-        from kvui import GameManager
-
-        class LegoStarWarsTheCompleteSagaManager(GameManager):
-            if not Utils.is_frozen():
-                logging_pairs = [
-                    ("Client", "Archipelago"),
-                    ("TCS Debug", "Debug"),
-                ]
-            else:
-                logging_pairs = [
-                    ("Client", "Archipelago"),
-                ]
-            base_title = "Archipelago Lego Star Wars: The Complete Saga Client"
-
-        self.ui = LegoStarWarsTheCompleteSagaManager(self)
-        self.ui_task = asyncio.create_task(self.ui.async_run(), name="UI")
+    def make_gui(self):
+        ui = super().make_gui()
+        ui.base_title = f"Archipelago {self.game} Client"
+        if __debug__ and not Utils.is_frozen():
+            ui.logging_pairs.append(("TCS Debug", "Debug"))
+        return ui
 
     async def server_auth(self, password_requested: bool = False):
         self.password_requested = password_requested
@@ -1289,7 +1331,7 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
             self.acquired_minikits.receive_minikit(self, code)
         elif code in self.acquired_characters.receivable_ap_ids:
             self.acquired_characters.receive_character(code)
-            self.unlocked_chapter_manager.on_character_or_episode_unlocked(self, code)
+            self.unlocked_chapter_manager.on_character_or_chapter_or_episode_unlocked(self, code)
         elif code in self.acquired_extras.receivable_ap_ids:
             self.acquired_extras.receive_extra(code)
         elif code in STUDS_AP_ID_TO_VALUE or code in self.power_up_receiver.receivable_ap_ids:
@@ -1333,6 +1375,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
 
         self.goal_manager = GoalManager()
         self.power_up_receiver = PowerUpReceiver()
+
+        self.shop_names_replacer.reset_persisted_client_data(self)
+        self.shop_names_replacer = ShopNamesReplacer()
 
         if clear_text_display_queue:
             self.text_display.message_queue.clear()
@@ -1678,6 +1723,10 @@ async def main():
 
     ctx = LegoStarWarsTheCompleteSagaContext()
     ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
+
+    if UNIVERSAL_TRACKER_LOADED:
+        # noinspection PyUnresolvedReferences
+        ctx.run_generator()
 
     if gui_enabled:
         ctx.run_gui()

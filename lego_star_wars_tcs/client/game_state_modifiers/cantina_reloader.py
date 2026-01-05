@@ -29,10 +29,9 @@ LEVEL_ID_CANTINA = 325
 
 
 ADDITIONAL_OK_IDS = {
-    # Skeleton is the backup character the client forces when the player does not have at least 2 unlocked non-vehicle
+    # Womp Rat is the backup character the client forces when the player does not have at least 2 unlocked non-vehicle
     # characters.
-    # todo: This currently does not happen because a Jedi and a Protocol Droid is forced into starting inventory.
-    # CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index,
+    CHARACTERS_AND_VEHICLES_BY_NAME["Womp Rat"].character_index,
 
     # This is the vehicle found in the outside area of the Cantina.
     # The client could probably check some flag of the character in memory to see if it is a ridable
@@ -161,6 +160,6 @@ class CantinaReloader(ClientComponent):
         if needed_remaining == 0:
             return replacements
         else:
-            # Fill remaining spots with the "Skeleton" "Extra Toggle" character.
-            replacements.extend([CHARACTERS_AND_VEHICLES_BY_NAME["Skeleton"].character_index] * needed_remaining)
+            # Fill remaining spots with the "Womp Rat" "Extra Toggle" character.
+            replacements.extend([CHARACTERS_AND_VEHICLES_BY_NAME["Womp Rat"].character_index] * needed_remaining)
             return replacements

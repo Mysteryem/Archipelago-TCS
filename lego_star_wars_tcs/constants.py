@@ -15,6 +15,7 @@ del _MANIFEST
 class CharacterAbility(IntFlag):
     NONE = 0
     ASTROMECH = auto()
+    # todo: This will eventually need to be split into separate Grapple and Blaster.
     BLASTER = auto()
     BOUNTY_HUNTER = auto()
     HOVER = auto()
@@ -24,13 +25,27 @@ class CharacterAbility(IntFlag):
     PROTOCOL_DROID = auto()
     SHORTIE = auto()
     SITH = auto()
+    # Relevant for some Imperial access and 6-1 Bounty Hunter access.
+    CAN_WEAR_HAT = auto()
+    # CAN_WEAR_HAT + BLASTER (grapple) on a single character.
+    CAN_WEAR_HAT_AND_GRAPPLE = auto()
+    # CAN_WEAR_HAT + JEDI on a single character.
+    CAN_WEAR_HAT_AND_DOUBLE_JUMP = auto()
+    CAN_RIDE_VEHICLES = auto()
+    CAN_PULL_LEVERS = auto()
+    CAN_PUSH_OBJECTS = auto()  # Blocks and Spinners
+    CAN_BUILD_BRICKS = auto()
+    CAN_JUMP_NORMALLY = auto()  # Has at least a basic jump
+    CAN_ATTACK_UP_CLOSE = auto()
+    CAN_DAGOBAH_SWAMP = auto()  # Basically just "this character is an Astromech Droid"
     # todo: Lots more abilities to add to split up and replace the basic existing ones...
     # GHOST = auto()
     # DROID = auto()
     # UNTARGETABLE = auto()  # Are there any characters other than Ghosts?
+    IS_A_VEHICLE = auto()
     VEHICLE_TIE = auto()
     VEHICLE_TOW = auto()
-    # VEHICLE_BLASTER = auto()
+    VEHICLE_BLASTER = auto()
 
 
 # Workaround for Python 3.10 support. Iterating Flag instances was only added in Python 3.11.
@@ -57,10 +72,38 @@ SHORTIE = CharacterAbility.SHORTIE
 SITH = CharacterAbility.SITH
 VEHICLE_TIE = CharacterAbility.VEHICLE_TIE
 VEHICLE_TOW = CharacterAbility.VEHICLE_TOW
+VEHICLE_BLASTER = CharacterAbility.VEHICLE_BLASTER
+
+# Chapter-specific flags.
+CAN_WEAR_HAT = CharacterAbility.CAN_WEAR_HAT
+CAN_WEAR_HAT_AND_GRAPPLE = CharacterAbility.CAN_WEAR_HAT_AND_GRAPPLE
+CAN_WEAR_HAT_AND_DOUBLE_JUMP = CharacterAbility.CAN_WEAR_HAT_AND_DOUBLE_JUMP
+CAN_DAGOBAH_SWAMP = CharacterAbility.CAN_DAGOBAH_SWAMP
+IS_A_VEHICLE = CharacterAbility.IS_A_VEHICLE
+
+# Extremely common ability flags.
+CAN_RIDE_VEHICLES = CharacterAbility.CAN_RIDE_VEHICLES
+CAN_PULL_LEVERS = CharacterAbility.CAN_PULL_LEVERS
+CAN_PUSH_OBJECTS = CharacterAbility.CAN_PUSH_OBJECTS
+CAN_BUILD_BRICKS = CharacterAbility.CAN_BUILD_BRICKS
+CAN_JUMP_NORMALLY = CharacterAbility.CAN_JUMP_NORMALLY
+CAN_ATTACK_UP_CLOSE = CharacterAbility.CAN_ATTACK_UP_CLOSE
 
 # todo: VEHICLE_TOW can probably be included in the future too.
 # todo: GHOST can probably be included in the future too.
 # todo: PROTOCOL_DROID_PANEL can probably be included in the future too.
 RARE_AND_USEFUL_ABILITIES = ASTROMECH | BOUNTY_HUNTER | HIGH_JUMP | SHORTIE | SITH | PROTOCOL_DROID | HOVER
+
+CHAPTER_SPECIFIC_FLAGS = (
+        CAN_WEAR_HAT_AND_GRAPPLE
+        | CAN_WEAR_HAT_AND_DOUBLE_JUMP
+        | CAN_WEAR_HAT
+        | CAN_DAGOBAH_SWAMP
+        | IS_A_VEHICLE
+)
+"""
+These flags should not be required to access chapters based on the abilities of the Story characters because they are
+only relevant to a limited number of chapters, where there are alternatives that the logic should consider.
+"""
 
 GOLD_BRICK_EVENT_NAME = "Gold Brick"

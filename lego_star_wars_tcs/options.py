@@ -14,6 +14,7 @@ from Options import (
     OptionGroup,
     DeathLink,
     ItemDict,
+    Removed,
 )
 
 from .levels import BOSS_UNIQUE_NAME_TO_CHAPTER, VEHICLE_CHAPTER_SHORTNAMES, EPISODE_TO_CHAPTER_AREAS
@@ -51,6 +52,101 @@ class ChoiceFromStringExtension(Choice):
                 self.value = k
                 return
         raise ValueError(f"{s} is not a valid string for {type(self)}. Expected: {sorted(self.name_lookup.values())}")
+
+
+class TextColorChoice(ChoiceFromStringExtension):
+    _COMMON_DOC_SUFFIX = "\n\n``/color_test`` in the game's client will demonstrate each of the colors in-game."
+    option_white_ffffff = 0xFFFFFF  # Location name default
+    option_white_green_outline_ffffff = 0xFFFFFF01  # with a green outline
+    option_white_red_outline_ffffff = 0xFFFFFF02  # with a red outline
+    # option_overbrightened_white = 0xFFFFFF03  # with brighter outlines
+    # option_black = 0x000000  # Black is basically unreadable.
+
+    option_bright_red_ff0000 = 0xFF0000
+    option_red_de0000 = 0xDE0000  # Trap default.
+    option_dark_red_7e0000 = 0x7E0000
+    option_darker_red_640000 = 0x640000
+
+    option_red_pink_ff007e = 0xFF007E
+    option_magenta_ff00ff = 0xFF00FF
+
+    option_purple_6e00de = 0x6E00DE  # Progression default.
+    option_light_blue_purple_7e7eff = 0x7E7EFF
+
+    option_deep_blue_0000ff = 0x0000FF
+    option_blue_007eff = 0x007EFF  # Useful default.
+    option_dark_blue_00007e = 0x00007E
+
+    option_cyan_00ffff = 0x00FFFF  # Filler default.
+    option_dark_cyan_007e7e = 0x007E7E
+    option_dark_sea_green_007e76 = 0x007E76
+    option_mint_green_7effc0 = 0x7EFFC0  # Player name default.
+
+    option_dark_green_007e00 = 0x007E00
+    option_bright_green_00ff00 = 0x00FF00
+    option_pea_green_80ff00 = 0x80FF00  # Location name default.
+
+    option_near_white_yellow_feffea = 0xFEFFEA
+    option_pale_yellow_ffff7e = 0xFFFF7E
+    option_yellow_ffff00 = 0xFFFF00  # Progression + Useful default.
+    option_dark_yellow_7e7e00 = 0x7E7E00
+    option_orange_ffc000 = 0xFFC000
+    option_dark_orange_ff7e00 = 0xFF7E00
+
+    rich_text_doc = True
+
+    def __init_subclass__(cls):
+        super().__init_subclass__()
+        # Append common docstring parts to the end of the subclass' docstring.
+        if not cls.__doc__.endswith(cls._COMMON_DOC_SUFFIX):
+            cls.__doc__ = cls.__doc__ + cls._COMMON_DOC_SUFFIX
+
+    @staticmethod
+    def colors_from_slot_data(colors_from_slot_data: list[int]) -> tuple[str, str, str, str, str, str, str]:
+        default_colors = [
+            ProgressionUsefulItemColor.default,
+            ProgressionItemColor.default,
+            UsefulItemColor.default,
+            FillerItemColor.default,
+            TrapItemColor.default,
+            PlayerNameColor.default,
+            LocationNameColor.default,
+        ]
+
+        # If the list of colours changes at some point, make sure that reading colors from slot_data is future-proofed.
+        if len(colors_from_slot_data) < len(default_colors):
+            colors_from_slot_data = colors_from_slot_data + default_colors[len(colors_from_slot_data):]
+        elif len(colors_from_slot_data) > len(default_colors):
+            colors_from_slot_data = colors_from_slot_data[:len(default_colors)]
+
+        colors = []
+        for i, value in enumerate(colors_from_slot_data):
+            # Type variables cannot be used in ClassVars, but AP does anyway, so Mypy complains.
+            if value in TextColorChoice.name_lookup:  # type: ignore
+                color = TextColorChoice(value)
+            else:
+                color = TextColorChoice(default_colors[i])
+            colors.append(color.current_key_no_hex_value)
+
+        # The only reason a tuple of `colors` isn't returned directly, is to make type checkers happy.
+        prog_useful, prog, useful, filler, trap, player, location = colors
+        return prog_useful, prog, useful, filler, trap, player, location
+
+    @staticmethod
+    def colors_to_slot_data(options: "LegoStarWarsTCSOptions") -> tuple[int, int, int, int, int, int, int]:
+        return (
+            options.progression_useful_item_color.value,
+            options.progression_item_color.value,
+            options.useful_item_color.value,
+            options.filler_item_color.value,
+            options.trap_item_color.value,
+            options.player_name_color.value,
+            options.location_name_color.value,
+        )
+
+    @property
+    def current_key_no_hex_value(self) -> str:
+        return self.current_key[:-7]
 
 
 class ChapterChoice(ChoiceFromStringExtension):
@@ -149,6 +245,7 @@ class MinikitGoalCompletionMethod(ChoiceFromStringExtension):
     recommended to enable a Goal Chapter when the Minikit Goal Completion Method is set to Instant.
     - Junkyard Minikit Display: Once you have enough Minikit items to meet your goal, the goal must be completed by
     using the Minikit Display in the outside Junkyard area of the Cantina.
+
     """
     display_name = "Minikit Goal Completion Method"
     rich_text_doc = True
@@ -193,6 +290,7 @@ class KyberBrickGoalCompletionMethod(ChoiceFromStringExtension):
 
     - Instant: The Kyber Brick goal is completed as soon as 7 Kyber Brick items are acquired. It is recommended to
     enable a Goal Chapter when the Kyber Brick Goal Completion Method is set to Instant.
+
     """
     display_name = "Kyber Brick Goal Completion Method"
     rich_text_doc = True
@@ -210,6 +308,7 @@ class GoalChapterLocationsMode(ChoiceFromStringExtension):
     placed there. Gold Bricks from the Goal Chapter will not be included in Gold Brick logic.
     - Normal: No changes will be made to the locations in the Goal Chapter, or to Gold Brick logic. Not recommended
     unless playing without ``!release`` after goaling.
+
     """
     display_name = "Goal Chapter Locations Mode"
     rich_text_doc = True
@@ -558,25 +657,31 @@ class EnableTrueJediLocations(DefaultOnToggle):
     rich_text_doc = True
 
 
-class EnableChapterCompletionCharacterUnlockLocations(DefaultOnToggle):
+class EnableChapterCompletionCharacterUnlockLocations(Removed):
+    pass
+
+
+class EnableStoryCharacterUnlockLocations(DefaultOnToggle):
     """
-    Enable locations for unlocking Story mode characters that would normally unlock when completing a Chapter in
+    Enable locations for unlocking Story mode characters that would normally unlock when completing a Chapter/Bonus in
     vanilla.
 
-    In vanilla, completing any Chapter with C-3PO as a playable Story mode character would unlock C-3PO. In vanilla,
-    this would mean completing either 2-3, 4-1, 5-2 or 6-1 because Chapters within an Episode unlock in order in
-    vanilla, but the AP randomizer allows for Chapters to be unlocked out-of-order, so, additionally, completing any of
-    4-2, 4-3, 4-4, 4-5, 5-6, 6-2 or 6-4, would also send the Story Character Unlock location for C-3PO.
+    In vanilla, completing any Chapter/Bonus with C-3PO as a playable Story mode character would unlock C-3PO. In
+    vanilla, this would mean completing either 2-3, 4-1, 5-2, 6-1 or A New Hope, because Chapters within an Episode
+    unlock in order in vanilla, but the AP randomizer allows for Chapters to be unlocked out-of-order, so, additionally,
+    completing any of 4-2, 4-3, 4-4, 4-5, 5-6, 6-2 or 6-4, would also send the Story Character Unlock location for
+    C-3PO.
 
-    The first Chapter completed that would unlock a Story mode character will send the Unlock location for that
+    The first Chapter/Bonus completed that would unlock a Story mode character will send the Unlock location for that
     character.
 
     Because Story mode is skipped in the AP randomizer, these character unlock locations are sent when the Chapters are
     completed in Free Play.
 
     With all Chapters enabled, this adds 56 locations.
+    With all Chapters and all Bonuses enabled, this adds 57 locations.
     """
-    display_name = "Chapter Completion Character Unlocks"
+    display_name = "Level Completion Character Unlocks"
     rich_text_doc = True
 
 
@@ -634,6 +739,7 @@ class Ridesanity(Toggle):
     Ridesanity adds up to 27 locations.
 
     There are 27 unique ridable characters:
+
     - AT-AT (6-3)
     - AT-ST (4-3, 6-3, 6-4, LEGO City)
     - Bantha (4-2, LEGO City, New Town)
@@ -662,26 +768,6 @@ class Ridesanity(Toggle):
     - Tractor (5-4, 6-4, LEGO City, New Town)
     - Wookie Flyer (LEGO City)
 
-    Alternatively listed by levels and the ridable characters found within them:
-    - Cantina: Cantina Car
-    - 1-1 (Negotiations): STAP
-    - 1-5 (Retake Theed Palace): Flash Speeder, Service Car
-    - 1-6 (Darth Maul): Service Car
-    - 3-4 (Defense of Kashyyyk): Clone Walker
-    - 4-1 (Secret Plans): Crane Control, Moon Car, Town Car
-    - 4-2 (Through The Jundland Wastes): Bantha, Dewback, Landspeeder
-    - 4-3 (Mos Eisley Spaceport): AT-ST, Dewback, Landspeeder, Mos Eisley Cannon
-    - 4-4 (Rescue The Princess): Crane Control
-    - 4-5 (Death Star Escape): Crane Control, Service Car
-    - 5-2 (Escape From Echo Base): Snowmobile, Stormtrooper Cannon, Tauntaun
-    - 5-4 (Dagobah): Tractor
-    - 5-5 (Cloud City Trap): Crane Control, Stormtrooper Cannon
-    - 5-6 (Betrayal Over Bespin): Cloud Car, Crane Control
-    - 6-2 (The Great Pit Of Carkoon): Big Skiff Cannon, Skiff Cannon
-    - 6-3 (Speeder Showdown): AT-AT, AT-ST, Speeder Bike
-    - 6-4 (The Battle Of Endor): AT-ST, Ewok Catapult, Tractor
-    - LEGO City: AT-ST, Bantha, Cloud Car, Dewback, Landspeeder, Moon Car, Tauntaun, Town Car, Tractor, Wookie flyer
-    - New Town: Bantha, Basketball Cannon, Clone Walker, Cloud Car, Dewback, Firetruck, Landspeeder, Lifeboat, Moon Car, Tauntaun, Town Car, Tractor
     """
     display_name = "Ridesanity Locations"
     rich_text_doc = True
@@ -720,15 +806,17 @@ class ChapterUnlockRequirement(ChoiceFromStringExtension):
     The requirements to access your starting Chapter will be given to you at the start.
 
     - Story Characters: A Chapter unlocks once its Story mode characters have been unlocked.
-    - Chapter Item (not implemented): A Chapter unlocks after receiving an unlock item specific to that Chapter,
-    e.g. "Chapter 2-3 Unlock".
+    - Chapter Item: A Chapter unlocks after receiving an unlock item specific to that Chapter, e.g. "Chapter 2-3
+    Unlock". The logic for the Chapter Item setting is overly restrictive, so it is easy to get many checks
+    out-of-logic. The logic is in the process of being overhauled to be more accurate.
     - Random Characters (not implemented): Each Chapter requires randomly chosen characters to unlock.
     - Open (not implemented): All chapters within an Episode are unlocked as soon as the Episode is unlocked.
+
     """
     display_name = "Chapter Unlock Requirements"
     rich_text_doc = True
     option_story_characters = 0
-    # option_chapter_item = 1  # Needs logic rewrite
+    option_chapter_item = 1  # Partially implemented with overly restrictive logic. Needs a logic rewrite.
     # option_random_characters = 2  # Needs logic rewrite + some way to display what characters are needed in-game.
     # option_open = 3  # Needs the ability to limit characters to only being usable within a specific episode/
     default = 0
@@ -746,6 +834,7 @@ class EpisodeUnlockRequirement(ChoiceFromStringExtension):
 
     - Open: All Episodes will be unlocked from the start.
     - Episode Item: Each Episode will unlock after receiving an unlock item for that Episode, e.g. "Episode 5 Unlock".
+
     """
     display_name = "Episode Unlock Requirements"
     rich_text_doc = True
@@ -768,6 +857,7 @@ class AllEpisodesCharacterPurchaseRequirements(ChoiceFromStringExtension):
     and rounded to the nearest integer, but always at least 1. The remaining "Episode Completion Token" items will be
     added to your starting inventory. For example, if you have 28 chapters enabled, 28 / 6 = 4.666 -> 5 in the pool and
     1 in your starting inventory.
+
     """
     display_name = "'All Episodes' Character Purchase Unlock Requirements"
     rich_text_doc = True
@@ -839,7 +929,7 @@ class PreferredCharacters(OptionSet):
     reduced, so not all characters may get added to the item pool.
 
     The names of all items can be found by starting the Lego Star Wars: The Complete Saga client and entering the
-    `/items` command.
+    ``/items`` command.
 
     If no vehicle Chapters are enabled, no vehicle characters will be included in the item pool.
     """
@@ -1160,6 +1250,7 @@ class ReceivedItemMessages(ChoiceFromStringExtension):
 
     - All: Every item shows a message
     - None: All items are received silently.
+
     """
     display_name = "Received Item Messages"
     rich_text_doc = True
@@ -1180,12 +1271,59 @@ class CheckedLocationMessages(ChoiceFromStringExtension):
 
     - All: Every checked location shows a message
     - None: No checked locations show a message
+
     """
     display_name = "Checked Location Messages"
     rich_text_doc = True
     default = 1
     option_none = 0
     option_all = 1
+
+
+class ProgressionUsefulItemColor(TextColorChoice):
+    """
+    Choose the color used to display the names of items that have both the Progression classification and the Useful
+    classification.
+    These are typically the most powerful progression items for a game.
+    """
+    display_name = "Progression + Useful Item Color"
+    default = TextColorChoice.option_yellow_ffff00
+
+
+class ProgressionItemColor(TextColorChoice):
+    """Choose the color used to display Progression classification item names."""
+    display_name = "Progression Item Color"
+    default = TextColorChoice.option_purple_6e00de
+
+
+class UsefulItemColor(TextColorChoice):
+    """Choose the color used to display Useful classification item names."""
+    display_name = "Useful Item Color"
+    default = TextColorChoice.option_blue_007eff
+
+
+class FillerItemColor(TextColorChoice):
+    """Choose the color used to display Filler classification item names."""
+    display_name = "Filler Item Color"
+    default = TextColorChoice.option_cyan_00ffff
+
+
+class TrapItemColor(TextColorChoice):
+    """Choose the color used to display Trap classification item names."""
+    display_name = "Trap Item Color"
+    default = TextColorChoice.option_red_de0000
+
+
+class PlayerNameColor(TextColorChoice):
+    """Choose the color used to display player names in Received Item and Checked Location messages."""
+    display_name = "Player Name Color"
+    default = TextColorChoice.option_mint_green_7effc0
+
+
+class LocationNameColor(TextColorChoice):
+    """Choose the color used to display location names in Received Item and Checked Location messages."""
+    display_name = "Location Name Color"
+    default = TextColorChoice.option_white_ffffff
 
 
 class LogicDifficulty(ChoiceFromStringExtension):
@@ -1235,7 +1373,7 @@ class LogicDifficulty(ChoiceFromStringExtension):
 
 # Not using DeathLinkMixin currently because the docstring needs to be different.
 class LegoStarWarsTCSDeathLink(DeathLink):
-    """When you die, everyone who enabled death link dies. Of course, the reverse is true too.
+    __doc__ = getattr(DeathLink, "__doc__", "") + """
 
     Death Link can be toggled on/off in the client with ``/toggle_death_link``.
 
@@ -1283,6 +1421,7 @@ class VehicleDeathLinkAmnesty(Range):
 
     - 1-4 (Mos Espa Pod Race)
     - 3-1 (Battle Over Coruscant)
+
     """
     display_name = "Vehicle* Death Link Amnesty"
     rich_text_doc = True
@@ -1351,7 +1490,7 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     starting_chapter: StartingChapter
     preferred_chapters: PreferredChapters
     prefer_entire_episodes: PreferEntireEpisodes
-    enable_story_character_unlock_locations: EnableChapterCompletionCharacterUnlockLocations
+    enable_story_character_unlock_locations: EnableStoryCharacterUnlockLocations
     enable_bonus_locations: EnableBonusLocations
     enable_all_episodes_purchases: EnableAllEpisodesCharacterPurchaseLocations
     enable_minikit_locations: EnableMinikitLocations
@@ -1383,6 +1522,13 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
     received_item_messages: ReceivedItemMessages
     checked_location_messages: CheckedLocationMessages
     uncap_original_trilogy_high_jump: UncapOriginalTrilogyHighJump
+    progression_useful_item_color: ProgressionUsefulItemColor
+    progression_item_color: ProgressionItemColor
+    useful_item_color: UsefulItemColor
+    filler_item_color: FillerItemColor
+    trap_item_color: TrapItemColor
+    player_name_color: PlayerNameColor
+    location_name_color: LocationNameColor
 
     # Death Link.
     death_link: LegoStarWarsTCSDeathLink
@@ -1393,6 +1539,9 @@ class LegoStarWarsTCSOptions(PerGameCommonOptions):
 
     # Future options, not implemented yet.
     # random_starting_level_max_starting_characters: RandomStartingLevelMaxStartingCharacters
+
+    def item_colors_to_slot_data(self) -> tuple[int, int, int, int, int, int, int]:
+        return TextColorChoice.colors_to_slot_data(self)
 
 
 OPTION_GROUPS: list[OptionGroup] = [
@@ -1427,7 +1576,7 @@ OPTION_GROUPS: list[OptionGroup] = [
     OptionGroup("Location Options", [
         EnableMinikitLocations,
         EnableTrueJediLocations,
-        EnableChapterCompletionCharacterUnlockLocations,
+        EnableStoryCharacterUnlockLocations,
         EnableBonusLocations,
         EnableAllEpisodesCharacterPurchaseLocations,
         EnableNonPowerBrickExtraLocations,
@@ -1457,6 +1606,13 @@ OPTION_GROUPS: list[OptionGroup] = [
         ReceivedItemMessages,
         CheckedLocationMessages,
         UncapOriginalTrilogyHighJump,
+        ProgressionUsefulItemColor,
+        ProgressionItemColor,
+        UsefulItemColor,
+        FillerItemColor,
+        TrapItemColor,
+        PlayerNameColor,
+        LocationNameColor,
     ]),
     OptionGroup("Death Link Options", [
         LegoStarWarsTCSDeathLink,

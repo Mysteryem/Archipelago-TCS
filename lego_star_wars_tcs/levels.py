@@ -12,10 +12,20 @@ from .constants import (
     BOUNTY_HUNTER,
     ASTROMECH,
     BLASTER,
+    PROTOCOL_DROID,
+    JEDI,
     VEHICLE_TIE,
     VEHICLE_TOW,
+    CAN_WEAR_HAT,
+    CAN_BUILD_BRICKS,
+    CAN_PULL_LEVERS,
+    CAN_ATTACK_UP_CLOSE,
+    CAN_PUSH_OBJECTS,
+    CAN_RIDE_VEHICLES,
+    IS_A_VEHICLE,
+    CHAPTER_SPECIFIC_FLAGS,
 )
-from .items import SHOP_SLOT_REQUIREMENT_TO_UNLOCKS
+from .items import SHOP_SLOT_REQUIREMENT_TO_UNLOCKS, CHARACTERS_AND_VEHICLES_BY_NAME
 
 
 @dataclass(frozen=True)
@@ -94,7 +104,19 @@ class ChapterArea:
     power_brick_ability_requirements: tuple[CharacterAbility, ...] = field(init=False)
     power_brick_location_name: str = field(init=False)
     power_brick_studs_cost: int = field(init=False)
-    all_minikits_ability_requirements: CharacterAbility = field(init=False)
+    all_minikits_ability_requirements: tuple[CharacterAbility, ...] = field(init=False)
+    completion_main_ability_requirements: CharacterAbility = field(init=False)
+    """
+    The combined, main abilities of the Story mode characters for this chapter.
+    """
+    completion_alt_ability_requirements: CharacterAbility | None = field(init=False)
+    """
+    Alternative chapter-specific logic that usually replaces a common requirement from the main ability requirements
+    with a rarer ability, e.g. replacing "CAN_WEAR_HAT" with "IMPERIAL" if the normal requirement would be to use a Hat
+    Machine to use an Imperial panel.
+    These requirements should not be used for the starting chapter because it is undesirable to force the player to
+    start with a rarer ability.
+    """
     boss: str | None = field(init=False)
 
     def __post_init__(self):
@@ -103,7 +125,7 @@ class ChapterArea:
         character_requirements = CHAPTER_AREA_STORY_CHARACTERS[self.short_name]
         object.__setattr__(self, "character_requirements", character_requirements)
 
-        character_shop_unlocks = {f"Purchase {character}": price for character, price
+        character_shop_unlocks = {f"Purchase {character} ({self.short_name})": price for character, price
                                   in SHOP_SLOT_REQUIREMENT_TO_UNLOCKS.get(self.short_name, {}).items()}
         object.__setattr__(self, "character_shop_unlocks", character_shop_unlocks)
 
@@ -123,6 +145,30 @@ class ChapterArea:
 
         boss = BOSS_CHARACTERS_BY_SHORTNAME.get(self.short_name)
         object.__setattr__(self, "boss", boss)
+
+        base_entrance_abilities = CharacterAbility.NONE
+        for character in character_requirements:
+            base_entrance_abilities |= CHARACTERS_AND_VEHICLES_BY_NAME[character].abilities
+        # Strip all chapter-specific flags. If there are any that are relevant to this chapter, they will be re-added in
+        # the next step.
+        base_entrance_abilities &= ~CHAPTER_SPECIFIC_FLAGS
+        # Add any chapter-specific flags and set possible alternatives
+        completion_alt_ability_requirements = None
+        if chapter_specific_requirement := CHAPTER_SPECIFIC_REQUIREMENTS.get(self.short_name):
+            story_logic, alternative_ability = chapter_specific_requirement
+            completion_main_ability_requirements = base_entrance_abilities | story_logic
+            if alternative_ability is not None and alternative_ability not in base_entrance_abilities:
+                # Define an alternative set of requirements.
+                completion_alt_ability_requirements = (base_entrance_abilities & ~story_logic) | alternative_ability
+        else:
+            completion_main_ability_requirements = base_entrance_abilities
+        if completion_main_ability_requirements is CharacterAbility.NONE:
+            raise AssertionError("Every chapter should have at least one CharacterAbility requirement.")
+        if completion_alt_ability_requirements is CharacterAbility.NONE:
+            raise AssertionError("Every chapter's alternate requiremenents should have at least one CharacterAbility"
+                                 " requirement.")
+        object.__setattr__(self, "completion_main_ability_requirements", completion_main_ability_requirements)
+        object.__setattr__(self, "completion_alt_ability_requirements", completion_alt_ability_requirements)
 
     @property
     def unique_boss_name(self) -> str | None:
@@ -147,6 +193,10 @@ class BonusArea:
     completion_ability_requirements: CharacterAbility = CharacterAbility.NONE
     gold_bricks_required: int = 0
     gold_brick: bool = True
+    story_characters: frozenset[str] = field(init=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "story_characters", BONUS_AREA_STORY_CHARACTERS.get(self.name, frozenset()))
 
     @property
     def completion_location_name(self) -> str:
@@ -363,6 +413,25 @@ CHAPTER_AREA_STORY_CHARACTERS: dict[str, frozenset[str]] = {
 }
 
 
+BONUS_AREA_STORY_CHARACTERS: dict[str, frozenset[str]] = {
+    k: frozenset(v) for k, v in {
+        "Mos Espa Pod Race (Original)": {
+            "Anakin's Pod",
+        },
+        "Anakin's Flight": {
+            "Naboo Starfighter",
+        },
+        "Gunship Cavalry (Original)": {
+            "Republic Gunship",
+        },
+        "A New Hope (Bonus Level)": {
+            "Darth Vader",
+            "C-3PO",
+        }
+    }.items()
+}
+
+
 class _PowerBrickData(NamedTuple):
     name: str
     ability_requirements: CharacterAbility | tuple[CharacterAbility, ...] | None
@@ -370,7 +439,8 @@ class _PowerBrickData(NamedTuple):
 
 
 POWER_BRICK_REQUIREMENTS: dict[str, _PowerBrickData] = {
-    # TODO: For future version, it is necessary to determine which Extras need Jedi/Protocol Droids to access.
+    # Currently, these requirements assume access to the chapter requires all the abilities of the Story characters of
+    # that chapter.
     "1-1": _PowerBrickData("Super Gonk", ASTROMECH, 100_000),
     "1-2": _PowerBrickData("Poo Money", BOUNTY_HUNTER, 100_000),
     "1-3": _PowerBrickData("Walkie Talkie Disable", BOUNTY_HUNTER | SITH, 5_000),
@@ -387,65 +457,73 @@ POWER_BRICK_REQUIREMENTS: dict[str, _PowerBrickData] = {
     "3-2": _PowerBrickData("Super Astromech", BOUNTY_HUNTER, 10_000),
     "3-3": _PowerBrickData("Super Jedi Slam", (HOVER, HIGH_JUMP), 11_000),
     "3-4": _PowerBrickData("Super Thermal Detonator", BOUNTY_HUNTER | SITH, 25_000),
-    "3-5": _PowerBrickData("Deflect Bolts", SITH | HIGH_JUMP, 150_000),
+    "3-5": _PowerBrickData("Deflect Bolts", SITH | HIGH_JUMP | PROTOCOL_DROID, 150_000),
     "3-6": _PowerBrickData("Dark Side", ASTROMECH, 25_000),
-    "4-1": _PowerBrickData("Super Blasters", (BOUNTY_HUNTER, IMPERIAL), 15_000),
+    "4-1": _PowerBrickData("Super Blasters", (JEDI | BOUNTY_HUNTER, JEDI | IMPERIAL), 15_000),
     "4-2": _PowerBrickData("Fast Force", BOUNTY_HUNTER, 40_000),
     "4-3": _PowerBrickData("Super Lightsabers", None, 40_000),
     "4-4": _PowerBrickData("Tractor Beam", None, 15_000),
-    "4-5": _PowerBrickData("Invincibility", None, 1_000_000),
+    "4-5": _PowerBrickData("Invincibility", JEDI, 1_000_000),
     "4-6": _PowerBrickData("Score x2", None, 1_250_000),
     "5-1": _PowerBrickData("Self Destruct", VEHICLE_TIE, 25_000),
     "5-2": _PowerBrickData("Fast Build", SITH, 30_000),
     "5-3": _PowerBrickData("Score x4", None, 2_500_000),
     "5-4": _PowerBrickData("Regenerate Hearts", SITH, 150_000),
     "5-5": _PowerBrickData("Score x6", BOUNTY_HUNTER | HOVER, 5_000_000),  # Note: In memory after Minikit Detector
-    "5-6": _PowerBrickData("Minikit Detector", BOUNTY_HUNTER, 250_000),  # Note: In memory before Score x6
+    "5-6": _PowerBrickData("Minikit Detector", None, 250_000),  # Note: In memory before Score x6
     "6-1": _PowerBrickData("Super Zapper", None, 14_000),
     "6-2": _PowerBrickData("Bounty Hunter Rockets", None, 20_000),
     "6-3": _PowerBrickData("Score x8", SHORTIE, 10_000_000),
-    "6-4": _PowerBrickData("Super Ewok Catapult", SHORTIE, 25_000),
+    "6-4": _PowerBrickData("Super Ewok Catapult", (SHORTIE | SITH | IMPERIAL, SHORTIE | SITH | CAN_WEAR_HAT), 25_000),
     "6-5": _PowerBrickData("Score x10", None, 20_000_000),  # Note: In memory after Infinite Torpedos
     "6-6": _PowerBrickData("Infinite Torpedos", None, 25_000),  # Note: In memory before Score x10
 }
 
-ALL_MINIKITS_REQUIREMENTS: dict[str, CharacterAbility] = {
-    "1-1": HIGH_JUMP | ASTROMECH | HOVER | SHORTIE,
-    "1-2": SHORTIE | BLASTER,
-    "1-3": SITH | HIGH_JUMP | HOVER | BOUNTY_HUNTER | SHORTIE,
-    "1-4": VEHICLE_TIE,
-    "1-5": SITH | BOUNTY_HUNTER | HIGH_JUMP,
-    "1-6": SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER | IMPERIAL,
-    "2-1": VEHICLE_TIE,
-    "2-2": SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE,
-    "2-3": HIGH_JUMP | IMPERIAL | SHORTIE,
-    "2-4": HIGH_JUMP | SHORTIE,
-    "2-5": VEHICLE_TIE,
-    "2-6": HIGH_JUMP | BLASTER | ASTROMECH,
-    "3-1": CharacterAbility.NONE,
-    "3-2": HIGH_JUMP | BLASTER | SHORTIE,
-    "3-3": HOVER | BOUNTY_HUNTER | HIGH_JUMP,
-    "3-4": SITH | HIGH_JUMP | HOVER,
-    "3-5": SITH | HIGH_JUMP | BLASTER | HOVER | BOUNTY_HUNTER | IMPERIAL,
-    "3-6": HOVER,
-    "4-1": SITH | BOUNTY_HUNTER | IMPERIAL,
-    "4-2": SITH | SHORTIE,
-    "4-3": SITH | HIGH_JUMP | BOUNTY_HUNTER | SHORTIE,
-    "4-4": SITH | BOUNTY_HUNTER | IMPERIAL,
-    "4-5": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
-    "4-6": VEHICLE_TOW | VEHICLE_TIE,
-    "5-1": VEHICLE_TIE,
-    "5-2": SITH | HOVER | ASTROMECH | BOUNTY_HUNTER | SHORTIE,
-    "5-3": VEHICLE_TOW | VEHICLE_TIE,
-    "5-4": SITH | BOUNTY_HUNTER | SHORTIE,
-    "5-5": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
-    "5-6": SITH | BOUNTY_HUNTER,
-    "6-1": SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
-    "6-2": SITH | HOVER | SHORTIE,
-    "6-3": SITH | HIGH_JUMP | BOUNTY_HUNTER | IMPERIAL | SHORTIE,
-    "6-4": BOUNTY_HUNTER,
-    "6-5": HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE | ASTROMECH,
-    "6-6": VEHICLE_TIE,
+ALL_MINIKITS_REQUIREMENTS: dict[str, tuple[CharacterAbility, ...]] = {
+    # Currently, these requirements assume access to the chapter requires all the abilities of the Story characters of
+    # that chapter.
+    "1-1": (HIGH_JUMP | ASTROMECH | HOVER | SHORTIE,),
+    "1-2": (SHORTIE | BLASTER,),
+    "1-3": (SITH | HIGH_JUMP | HOVER | BOUNTY_HUNTER | SHORTIE,),
+    "1-4": (VEHICLE_TIE,),
+    "1-5": (SITH | BOUNTY_HUNTER | HIGH_JUMP,),
+    "1-6": (SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER | IMPERIAL,),
+    "2-1": (VEHICLE_TIE,),
+    "2-2": (SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER | SHORTIE,),
+    "2-3": (HIGH_JUMP | IMPERIAL | SHORTIE,),
+    "2-4": (HIGH_JUMP | SHORTIE,),
+    "2-5": (VEHICLE_TIE,),
+    "2-6": (HIGH_JUMP | BLASTER | ASTROMECH,),
+    "3-1": (CharacterAbility.NONE,),
+    "3-2": (HIGH_JUMP | BLASTER | SHORTIE | PROTOCOL_DROID,),
+    "3-3": (HOVER | BOUNTY_HUNTER | HIGH_JUMP,),
+    "3-4": (SITH | HIGH_JUMP | HOVER,),
+    # Technically PROTOCOL_DROID is not required, but you must save and exit after getting the kit if you don't have
+    # PROTOCOL_DROID, so PROTOCOL_DROID can be expected for the most basic logic difficulty only.
+    "3-5": (SITH | HIGH_JUMP | BLASTER | HOVER | BOUNTY_HUNTER | IMPERIAL | PROTOCOL_DROID,),
+    "3-6": (HOVER,),
+    # At least one kit requires JEDI, but there is a kit that requires SITH, so JEDI does not need to be specified.
+    "4-1": (SITH | BOUNTY_HUNTER | IMPERIAL,),
+    "4-2": (SITH | BOUNTY_HUNTER | SHORTIE,),
+    "4-3": (SITH | BOUNTY_HUNTER | SHORTIE,),
+    "4-4": (SITH | BOUNTY_HUNTER | IMPERIAL,),
+    # At least one kit requires JEDI, but there is a kit that requires SITH, so JEDI does not need to be specified.
+    "4-5": (SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,),
+    "4-6": (VEHICLE_TOW | VEHICLE_TIE,),
+    "5-1": (VEHICLE_TIE,),
+    # At least one kit requires JEDI, but there is a kit that requires SITH, so JEDI does not need to be specified.
+    "5-2": (SITH | HOVER | ASTROMECH | BOUNTY_HUNTER | SHORTIE,),
+    "5-3": (VEHICLE_TOW | VEHICLE_TIE,),
+    "5-4": (SITH | BOUNTY_HUNTER | SHORTIE,),
+    "5-5": (SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,),
+    # At least one kit requires JEDI, but there is a kit that requires SITH, so JEDI does not need to be specified.
+    "5-6": (SITH | BOUNTY_HUNTER,),
+    "6-1": (SITH | SHORTIE | CAN_WEAR_HAT, SITH | SHORTIE | IMPERIAL),
+    "6-2": (SITH | HOVER | SHORTIE,),
+    "6-3": (SITH | BOUNTY_HUNTER | IMPERIAL | SHORTIE,),
+    "6-4": (JEDI | BOUNTY_HUNTER,),
+    "6-5": (BLASTER | BOUNTY_HUNTER | SHORTIE | ASTROMECH | PROTOCOL_DROID,),
+    "6-6": (VEHICLE_TIE,),
 }
 
 BOSS_CHARACTERS_BY_SHORTNAME: dict[str, str] = {
@@ -500,6 +578,49 @@ DIFFICULT_OR_IMPOSSIBLE_TRUE_JEDI: set[str] = {
     # I am assuming that the extra room where the door needs to be blown up is required to get True Jedi in 6-5.
     "6-5",
 }
+
+
+CHAPTER_SPECIFIC_REQUIREMENTS: dict[str, tuple[CharacterAbility, CharacterAbility | None]] = {
+    # Mos Espa Pod Race does not require any Vehicle abilities, but does require having at least one vehicle character
+    # unlocked, so extra logic is needed to ensure the player actually has a vehicle character.
+    "1-4": (IS_A_VEHICLE, None),
+    # There is a Hat Machine in Level D, which you can take all the way back to behind spawn to the Imperial Panel with
+    # a Minikit behind.
+    # All the characters that can wear hats can jump and can make it back to the panel.
+    # todo: Maybe the most basic logic level should use (CAN_WEAR_HAT_AND_GRAPPLE or CAN_WEAR_HAT_AND_DOUBLE_JUMP)
+    #  because CAN_WEAR_HAT on its own requires either a tight jump, or jumping off a small garbage bin than can be
+    #  destroyed by accident.
+    "4-3": (CAN_WEAR_HAT, CharacterAbility.IMPERIAL),
+    # There is a section where a Stormtrooper helmet needs to be taken across a gap that requires grappling if you want
+    # to keep the hat.
+    "4-4": (CharacterAbility.CAN_WEAR_HAT_AND_GRAPPLE, CharacterAbility.IMPERIAL),
+    # In 4-5, there is an Imperial Hat Machine with an Imperial panel that requires grappling across a gap to reach
+    # (Level A), so, if the player has no Imperial character, they need a BLASTER character that can wear hats.
+    # This additionally covers a later use of an Imperial Hat Machine where the panel is at the top of an elevator
+    # (level B), and another later use of an Imperial Hat Machine where the panel is at the end of a Zipup, across a gap
+    # (level C).
+    "4-5": (CharacterAbility.CAN_WEAR_HAT_AND_GRAPPLE, CharacterAbility.IMPERIAL),
+    "5-4": (CharacterAbility.CAN_DAGOBAH_SWAMP, None),
+    # In 5-5, there is an Imperial Hat Machine with an Imperial panel that requires double-jumping across a gap to
+    # reach, so, if the player has no Imperial character, they need a Jedi/Sith that can wear hats.
+    # This gets its own flag, instead of being JEDI | CAN_WEAR_HAT, for logic performance reasons. The complexity comes
+    # from the fact that characters may have additional flags, but the logic system prefers to store only the combined
+    # flag of all currently usable abilities.
+    "5-5": (CharacterAbility.CAN_WEAR_HAT_AND_DOUBLE_JUMP, CharacterAbility.IMPERIAL),
+    # Level A has a Hat Machine where you need to walk to an elevator with the hat.
+    "5-6": (CAN_WEAR_HAT, CharacterAbility.IMPERIAL),
+    # The level is played in Story with a character than can wear hats instead of needing a bounty hunter.
+    "6-1": (CAN_WEAR_HAT, CharacterAbility.BOUNTY_HUNTER),
+}
+"""
+Chapter completions that require logic that is specific to that chapter.
+
+The first element of each value are the abilities that would normally be used in Story mode.
+
+The second element of each value is an optional alternative ability that can be used instead, but often requires a rarer
+ability. 
+"""
+
 
 # TODO: Record Level IDs, these would mostly be there to help make map switching in the tracker easier, and would
 #  serve as a record of data that might be useful for others.
@@ -595,9 +716,30 @@ BONUS_AREAS = [
     # Could require: "Darth Vader" + "Stormtrooper" + "C-3PO"
     BonusArea("A New Hope (Bonus Level)", 0x86E249, 0x8, 150, 29, gold_bricks_required=20),
     BonusArea("LEGO City", 0x86E3B8, 0x1, 311, 59,
-              gold_bricks_required=10, completion_ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
+              gold_bricks_required=10,
+              completion_ability_requirements=(
+                      JEDI
+                      | SITH
+                      | BLASTER
+                      | BOUNTY_HUNTER
+                      | CAN_BUILD_BRICKS
+                      | CAN_PULL_LEVERS
+                      | CAN_ATTACK_UP_CLOSE
+                      | CAN_RIDE_VEHICLES
+              )),
     BonusArea("New Town", 0x86E3A0, 0x1, 309, 57,
-              gold_bricks_required=50, completion_ability_requirements=SITH | HIGH_JUMP | BLASTER | BOUNTY_HUNTER),
+              gold_bricks_required=50,
+              completion_ability_requirements=(
+                      JEDI
+                      | SITH
+                      | BLASTER
+                      | BOUNTY_HUNTER
+                      | CAN_BUILD_BRICKS
+                      | CAN_PULL_LEVERS
+                      | CAN_ATTACK_UP_CLOSE
+                      | CAN_PUSH_OBJECTS
+                      | CAN_RIDE_VEHICLES
+              )),
     # The bonus level was never completed, so there is just the trailer to watch (which can be skipped immediately).
     # No gold brick for watching the trailer, but it does unlock the shop slot for purchasing Indiana Jones in vanilla
     # todo: Add the Purchase Indiana Jones location.

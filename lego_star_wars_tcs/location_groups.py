@@ -1,4 +1,4 @@
-from .levels import SHORT_NAME_TO_CHAPTER_AREA
+from .levels import SHORT_NAME_TO_CHAPTER_AREA, BONUS_NAME_TO_BONUS_AREA
 from .locations import LOCATION_NAME_TO_ID
 
 
@@ -29,9 +29,14 @@ LOCATION_GROUPS: dict[str, set[str]] = {
     # Chapter Completion Character Unlocks can often be accessed from multiple Chapters, so are put in separate location
     # groups.
     **{
-        f"Chapter Completion Character Unlocks - {shortname}": {
-            f"Chapter Completion - Unlock {char}" for char in area.character_requirements
+        f"Level Completion Character Unlocks - {shortname}": {
+            f"Level Completion - Unlock {char}" for char in area.character_requirements
         } for shortname, area in SHORT_NAME_TO_CHAPTER_AREA.items()
+    },
+    **{
+        f"Level Completion Character Unlocks - {bonus_name}": {
+            f"Level Completion - Unlock {char}" for char in area.story_characters
+        } for bonus_name, area in BONUS_NAME_TO_BONUS_AREA.items() if area.story_characters
     },
     **{
         f"Minikits - {shortname}": {

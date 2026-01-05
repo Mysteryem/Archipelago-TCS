@@ -10,10 +10,14 @@ from ...items import (
     CHARACTERS_AND_VEHICLES_BY_NAME,
     GenericItemData,
 )
+from ...levels import CHAPTER_AREAS
 from . import ItemReceiver
 
 
 _SEPARATELY_HANDLED_GENERIC = {
+    "Silver Stud",
+    "Gold Stud",
+    "Blue Stud",
     "Purple Stud",
     "Power Up"
 }
@@ -23,6 +27,9 @@ RECEIVABLE_GENERIC_BY_AP_ID: Mapping[int, GenericItemData] = {
 }
 EPISODE_UNLOCKS: Mapping[int, int] = {
     GENERIC_BY_NAME[f"Episode {i} Unlock"].code: i for i in range(1, 6+1)
+}
+CHAPTER_UNLOCKS: Mapping[int, str] = {
+    GENERIC_BY_NAME[f"{chapter.short_name} Unlock"].code: chapter.short_name for chapter in CHAPTER_AREAS
 }
 ALL_EPISODES_TOKEN: int = GENERIC_BY_NAME["Episode Completion Token"].code
 PROGRESSIVE_SCORE_MULTIPLIER: int = GENERIC_BY_NAME["Progressive Score Multiplier"].code
@@ -98,12 +105,14 @@ class AcquiredGeneric(ItemReceiver):
     receivable_ap_ids = RECEIVABLE_GENERIC_BY_AP_ID
 
     received_episode_unlocks: set[int]
+    # received_chapter_unlocks: set[str]
     episode_completion_token_count: int = 0
     progressive_score_count: int = 0
     kyber_brick_count: int = 0
 
     def __init__(self):
         self.received_episode_unlocks = set()
+        # self.received_chapter_unlocks = set()
 
     @subscribe_event
     def init_from_slot_data(self, _event: OnReceiveSlotDataEvent) -> None:
@@ -111,6 +120,7 @@ class AcquiredGeneric(ItemReceiver):
 
     def clear_received_items(self) -> None:
         self.received_episode_unlocks.clear()
+        # self.received_chapter_unlocks.clear()
         self.episode_completion_token_count = 0
         self.progressive_score_count = 0
         self.kyber_brick_count = 0
@@ -132,7 +142,11 @@ class AcquiredGeneric(ItemReceiver):
         # Episode Unlocks
         elif ap_item_id in EPISODE_UNLOCKS:
             self.received_episode_unlocks.add(EPISODE_UNLOCKS[ap_item_id])
-            ctx.unlocked_chapter_manager.on_character_or_episode_unlocked(ctx, ap_item_id)
+            ctx.unlocked_chapter_manager.on_character_or_chapter_or_episode_unlocked(ctx, ap_item_id)
+        # Chapter Unlocks
+        elif ap_item_id in CHAPTER_UNLOCKS:
+            # self.received_chapter_unlocks.add(CHAPTER_UNLOCKS[ap_item_id])
+            ctx.unlocked_chapter_manager.on_character_or_chapter_or_episode_unlocked(ctx, ap_item_id)
         # Kyber Brick goal items
         elif ap_item_id == KYBER_BRICK:
             self.kyber_brick_count += 1

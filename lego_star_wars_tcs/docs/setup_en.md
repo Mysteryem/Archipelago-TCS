@@ -24,19 +24,23 @@ correctly. Crashes can occur as late as the title screen.
 `Application load error 5:0000065434` when starting the game through DxWnd, copy your `Steam.exe` file into the same
 directory as your `LEGOStarWarsSaga.exe`.
 - [Universal Tracker](https://discord.com/channels/731205301247803413/1367270230635839539) for Archipelago (links to the
-Universal Tracker channel in the Archipelago discord server)
+Universal Tracker channel in the Archipelago discord server). Lego Star Wars: The Complete Saga Archipelago supports
+yamlless Universal Tracker tracking. The Lego Star Wars: The Complete Saga Client will embed Universal Tracker within
+the client when Universal Tracker is installed.
 
 ## Apworld Installation Instructions
 
-Install the Lego Star Wars: The Complete Saga apworld by either directly putting it into your `custom_worlds` folder,
-or by dragging and dropping the apworld onto the Archipelago Launcher.
+Install the Lego Star Wars: The Complete Saga apworld by either
+- double-clicking on the .apworld,
+- or directly putting it into your `custom_worlds` folder,
+- or by dragging and dropping the apworld onto the Archipelago Launcher.
 
 The Archipelago Launcher will need to be restarted if it was already open when the apworld was installed.
 
 ## Connecting to the Archipelago server
 When connecting to a multiworld for the first time, a new game should be started. Save slots are bound to the first
-multiworld and slot name they were connected to. To resume playing a multiworld at a later time, the same save slot that
-initially connected to that multiworld should be loaded. 
+multiworld seed and slot name they were connected to. To resume playing a multiworld at a later time, the same save slot
+that initially connected to that multiworld should be loaded. 
 
 To connect to the multiworld server, run the **Lego Star Wars: The Complete Saga Client** from the **Archipelago Launcher**
 and connect it to the Archipelago server. Lego Star Wars: The Complete Saga must be running before a connection can be

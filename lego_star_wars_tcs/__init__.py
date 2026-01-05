@@ -14,12 +14,12 @@ from BaseClasses import (
     LocationProgressType,
 )
 from Options import OptionError
-from worlds.AutoWorld import WebWorld, World
+from worlds.AutoWorld import WebWorld, World, LogicMixin
 from worlds.LauncherComponents import components, Component, launch_subprocess, Type
 from worlds.generic.Rules import set_rule, add_rule
 
 from . import constants, regions
-from .constants import CharacterAbility, GOLD_BRICK_EVENT_NAME
+from .constants import CharacterAbility, GOLD_BRICK_EVENT_NAME, GAME_NAME, CHAPTER_SPECIFIC_FLAGS
 from .items import (
     ITEM_NAME_TO_ID,
     LegoStarWarsTCSItem,
@@ -52,6 +52,7 @@ from .levels import (
     BONUS_NAME_TO_BONUS_AREA,
     BOSS_UNIQUE_NAME_TO_CHAPTER,
     DIFFICULT_OR_IMPOSSIBLE_TRUE_JEDI,
+    CHAPTER_SPECIFIC_REQUIREMENTS,
 )
 from .locations import LOCATION_NAME_TO_ID, LegoStarWarsTCSLocation, LEVEL_SHORT_NAMES_SET, LegoStarWarsTCSShopLocation
 from .options import (
@@ -62,6 +63,7 @@ from .options import (
     OnlyUniqueBossesCountTowardsGoal,
     OPTION_GROUPS,
     GoalChapterLocationsMode,
+    ChapterUnlockRequirement,
 )
 from .option_resolution.common import resolve_options
 from .ridables import RIDABLES_REQUIREMENTS
@@ -131,10 +133,8 @@ class LegoStarWarsTCSWorld(World):
 
     starting_character_abilities: CharacterAbility = CharacterAbility.NONE
 
-    effective_character_ability_names: dict[str, tuple[str, ...]]
     effective_character_abilities: dict[str, CharacterAbility]
     effective_item_classifications: dict[str, ItemClassification]
-    effective_item_collect_extras: dict[str, list[str] | None]
 
     enabled_chapters: set[str]
     enabled_chapters_with_locations: set[str]  # Includes the Goal Chapter when it has locations.
@@ -162,7 +162,7 @@ class LegoStarWarsTCSWorld(World):
     ridesanity_spots: dict[str, list[tuple[Location | Entrance, tuple[CharacterAbility, ...]]]]
     ridesanity_location_count: int = 0
 
-    def __init__(self, multiworld, player: int):
+    def __init__(self, multiworld: MultiWorld, player: int):
         super().__init__(multiworld, player)
         self.enabled_chapters = set()
         self.enabled_chapters_with_locations = set()
@@ -204,9 +204,9 @@ class LegoStarWarsTCSWorld(World):
     def evaluate_effective_item(self,
                                 name: str,
                                 effective_character_abilities_lookup: dict[str, CharacterAbility] | None = None,
-                                effective_character_ability_names_lookup: dict[str, tuple[str, ...]] | None = None):
+                                ) -> tuple[ItemClassification, CharacterAbility]:
         classification = ItemClassification.filler
-        collect_extras: Iterable[str] = ()
+        abilities = CharacterAbility.NONE
 
         item_data = ITEM_DATA_BY_NAME[name]
         if item_data.code < 1:
@@ -227,11 +227,6 @@ class LegoStarWarsTCSWorld(World):
                 abilities = effective_character_abilities_lookup[name]
             else:
                 abilities = item_data.abilities & ~self.starting_character_abilities
-
-            if effective_character_ability_names_lookup is not None:
-                collect_extras = effective_character_ability_names_lookup[name]
-            else:
-                collect_extras = cast(list[str], [ability.name for ability in abilities])
 
             if name in self.character_chapter_access_counts:
                 if self.character_chapter_access_counts[name] >= self.prog_useful_level_access_threshold_count:
@@ -286,20 +281,21 @@ class LegoStarWarsTCSWorld(World):
                 classification = ItemClassification.progression_skip_balancing
             elif name.startswith("Episode ") and name.endswith(" Unlock"):
                 classification = ItemClassification.progression | ItemClassification.useful
+            elif name[:3] in self.enabled_chapters and name[3:] == " Unlock":
+                # Chapter Unlock item.
+                classification = ItemClassification.progression
 
-        return classification, collect_extras if collect_extras else None
+        return classification, abilities
 
     def _get_effective_item_data(self,
                                  starting_abilities: CharacterAbility,
-                                 ) -> tuple[dict[str, ItemClassification], dict[str, Iterable[str] | None]]:
+                                 ) -> tuple[dict[str, ItemClassification], dict[str, CharacterAbility]]:
         """
         Pre-calculate the effective character abilities and classification of each item to speed up the creation
         of items with multiple copies.
         """
         effective_character_abilities: dict[str, CharacterAbility] = {}
-        effective_character_ability_names: dict[str, tuple[str, ...]] = {}
 
-        effective_ability_cache: dict[CharacterAbility, tuple[str, ...]] = {}
         for name, char in CHARACTERS_AND_VEHICLES_BY_NAME.items():
             # Remove abilities provided by the starting characters from other characters, potentially changing the
             # classification of other characters if all their abilities are covered by the starting characters.
@@ -307,22 +303,18 @@ class LegoStarWarsTCSWorld(World):
             # collected.
             effective_abilities: CharacterAbility = char.abilities & ~starting_abilities
             effective_character_abilities[name] = effective_abilities
-            if effective_abilities in effective_ability_cache:
-                effective_character_ability_names[name] = effective_ability_cache[effective_abilities]
-            else:
-                effective_ability_names = tuple(cast(list[str], [ability.name for ability in effective_abilities]))
-                effective_ability_cache[effective_abilities] = effective_ability_names
-                effective_character_ability_names[name] = effective_ability_names
 
         effective_item_classifications: dict[str, ItemClassification] = {}
-        effective_item_collect_extras: dict[str, Iterable[str] | None] = {}
+        effective_item_abilities: dict[str, CharacterAbility] = {}
         for item in self.item_name_to_id:
-            classification, collect_extras = self.evaluate_effective_item(item,
-                                                                          effective_character_abilities,
-                                                                          effective_character_ability_names)
+            classification, effective_abilities = self.evaluate_effective_item(item, effective_character_abilities)
             effective_item_classifications[item] = classification
-            effective_item_collect_extras[item] = collect_extras
-        return effective_item_classifications, effective_item_collect_extras
+            # The returned `effective_abiltiies` should be the same as what was in `effective_character_abilities`.
+            # The returned `effective_abiltiies` is not actually needed here, but `effective_character_abilities` is not
+            # always available when `self.evaluate_effective_item()` is called.
+            assert effective_abilities is effective_character_abilities.get(item, CharacterAbility.NONE)
+            effective_item_abilities[item] = effective_abilities
+        return effective_item_classifications, effective_item_abilities
 
     def get_filler_item_name(self) -> str:
         junk_weights: dict[str, int] = self.options.junk_weights.value
@@ -330,19 +322,19 @@ class LegoStarWarsTCSWorld(World):
 
     def create_item(self, name: str) -> LegoStarWarsTCSItem:
         code = self.item_name_to_id[name]
-        classification, collect_extras = self.evaluate_effective_item(name)
+        classification, collect_abilities = self.evaluate_effective_item(name)
 
-        return LegoStarWarsTCSItem(name, classification, code, self.player, collect_extras)
+        return LegoStarWarsTCSItem(name, classification, code, self.player, collect_abilities)
 
     def _create_item_ex(self,
                         name: str,
                         classification_lookup: dict[str, ItemClassification],
-                        collect_extras_lookup: dict[str, Iterable[str] | None]):
+                        abilities_lookup: dict[str, CharacterAbility]):
         code = self.item_name_to_id[name]
         classification = classification_lookup[name]
-        collect_extras = collect_extras_lookup[name]
+        abilities = abilities_lookup[name]
 
-        return LegoStarWarsTCSItem(name, classification, code, self.player, collect_extras)
+        return LegoStarWarsTCSItem(name, classification, code, self.player, abilities)
 
     def create_event(self, name: str) -> LegoStarWarsTCSItem:
         return LegoStarWarsTCSItem(name, ItemClassification.progression, None, self.player)
@@ -396,81 +388,120 @@ class LegoStarWarsTCSWorld(World):
         #         vehicle = CHARACTERS_AND_VEHICLES_BY_NAME["Anakin's Pod"]
         #         possible_pool_character_items[vehicle.name] = vehicle
 
-        # Add characters necessary to unlock the starting chapter into starting inventory.
-        for name in CHAPTER_AREA_STORY_CHARACTERS[self.starting_chapter.short_name]:
-            self.push_precollected(self.create_item(name))
-            del possible_pool_character_items[name]
+        if self.options.chapter_unlock_requirement == ChapterUnlockRequirement.option_story_characters:
+            chapters_unlock_with_characters = True
+            # Add characters necessary to unlock the starting chapter into starting inventory.
+            # The story character names are a `set`, so sort before iterating to get a deterministic iteration order.
+            for name in sorted(CHAPTER_AREA_STORY_CHARACTERS[self.starting_chapter.short_name]):
+                self.push_precollected(self.create_item(name))
+                del possible_pool_character_items[name]
+            pool_required_chapter_unlock_items = []
+        elif self.options.chapter_unlock_requirement == ChapterUnlockRequirement.option_chapter_item:
+            chapters_unlock_with_characters = False
+            starting_chapter_short_name = self.starting_chapter.short_name
+            self.push_precollected(self.create_item(f"{starting_chapter_short_name} Unlock"))
+            pool_required_chapter_unlock_items = [f"{short_name} Unlock" for short_name in self.enabled_chapters
+                                                  if short_name != starting_chapter_short_name]
+
+            # Only give enough characters to fulfil the main requirements of the starting chapter.
+            # The alt requirements, if they exist, often replace a common requirement with a rarer requirement.
+            starting_chapter_entrance_abilities = self.starting_chapter.completion_main_ability_requirements
+
+            starting_chapter_entrance_abilities_list = sorted(starting_chapter_entrance_abilities)
+
+            # Shuffle the order the abilities will be fulfilled in.
+            fulfilled_abilities: set[CharacterAbility] = set()
+            self.random.shuffle(starting_chapter_entrance_abilities_list)
+
+            # Always pick CAN_ abilities last to avoid picking very boring characters at the start with basically no
+            # actual abilities.
+            # Always pick VEHICLE_BLASTER last to avoid picking a VEHICLE_BLASTER, and then picking a VEHICLE_TOW that
+            # also has VEHICLE_BLASTER.
+            pick_order = {
+                CharacterAbility.CAN_ATTACK_UP_CLOSE: 1,
+                CharacterAbility.CAN_RIDE_VEHICLES: 1,
+                CharacterAbility.CAN_JUMP_NORMALLY: 1,
+                CharacterAbility.CAN_PULL_LEVERS: 1,
+                CharacterAbility.CAN_PUSH_OBJECTS: 1,
+                CharacterAbility.CAN_BUILD_BRICKS: 1,
+                CharacterAbility.VEHICLE_BLASTER: 1,
+                **dict.fromkeys(CHAPTER_SPECIFIC_FLAGS, 2),
+            }
+            starting_chapter_entrance_abilities_list.sort(key=lambda ability: pick_order.get(ability, 0))
+
+            # Finally pick characters to fulfil the abilities.
+            ability_costs = {
+                CharacterAbility.SITH: 10,
+                CharacterAbility.BOUNTY_HUNTER: 10,
+                CharacterAbility.ASTROMECH: 8,
+                CharacterAbility.SHORTIE: 8,
+                CharacterAbility.HIGH_JUMP: 8,
+                CharacterAbility.HOVER: 7,
+                CharacterAbility.IMPERIAL: 6,
+                CharacterAbility.CAN_WEAR_HAT: 0,
+                CharacterAbility.JEDI: 2,
+                CharacterAbility.BLASTER: 2,
+                CharacterAbility.CAN_ATTACK_UP_CLOSE: 1,
+                CharacterAbility.CAN_RIDE_VEHICLES: 1,
+                CharacterAbility.CAN_JUMP_NORMALLY: 1,
+                CharacterAbility.CAN_PULL_LEVERS: 1,
+                CharacterAbility.VEHICLE_TOW: 10,
+                CharacterAbility.VEHICLE_TIE: 8,
+                CharacterAbility.VEHICLE_BLASTER: 2,
+                CharacterAbility.IS_A_VEHICLE: 0,
+            }
+
+            def sort_func(data: GenericCharacterData):
+                value = 0
+                for ability in data.abilities:
+                    value += ability_costs.get(ability, 0)
+                return value
+
+            # Pre-calculate the list of characters that provide each individual ability.
+            characters_by_ability: dict[CharacterAbility, list[GenericCharacterData]] = {}
+            for character_data in possible_pool_character_items.values():
+                for ability in character_data.abilities:
+                    characters_by_ability.setdefault(ability, []).append(character_data)
+
+            for individual_ability in starting_chapter_entrance_abilities_list:
+                if individual_ability in fulfilled_abilities:
+                    # A character picked earlier also had this ability, so there does not need to be another character
+                    # picked.
+                    continue
+                candidates = characters_by_ability[individual_ability]
+                # Shuffle first, so that ties on the sort have deterministically random order.
+                self.random.shuffle(candidates)
+                candidates.sort(key=sort_func)
+                # Randomly pick from the first quarter to avoid always picking the character in the list with the lowest
+                # ability score.
+                picks = candidates[0:max(1, round(len(candidates) * 0.25))]
+                picked = self.random.choice(picks)
+                self.push_precollected(self.create_item(picked.name))
+                del possible_pool_character_items[picked.name]
+                fulfilled_abilities.update(picked.abilities)
+                for ability in picked.abilities:
+                    # The ability is provided by the picked character, so it is no longer relevant for sorting future
+                    # picks.
+                    ability_costs[ability] = 0
+        else:
+            raise Exception(f"Unexpected Chapter Unlock Requirement {self.options.chapter_unlock_requirement}")
+
         if self.options.episode_unlock_requirement == "episode_item":
             self.push_precollected(self.create_item(f"Episode {self.starting_episode} Unlock"))
 
         # Gather the abilities of all items in starting inventory, so that they can be removed from other created items,
         # improving generation performance.
         initial_starting_items = cast(list[LegoStarWarsTCSItem], self.multiworld.precollected_items[self.player])
-        starting_collect_extras = {s for item in initial_starting_items if item.collect_extras
-                                   for s in item.collect_extras}
         starting_abilities = CharacterAbility.NONE
-        # The Enum class supports __getitem__ for getting members by name, but __contains__ checks whether an Enum
-        # instance belongs to that Enum class, so checking if a string is a member name needs to use __members__ or
-        # try-except KeyError.
-        ability_members = CharacterAbility.__members__
-        for collect_extra in starting_collect_extras:
-            if collect_extra in ability_members:
-                starting_abilities |= CharacterAbility[collect_extra]
-
-        # todo: In the future, it will be necessary to ensure the player has at least 1 (maybe better to be 2) starting
-        #  non-vehicle characters when starting with a non-vehicle level, and at least 1 (maybe better to be 2) starting
-        #  vehicles when starting with a vehicle level.
-
-        # todo: Logic currently assumes the player always has Protocol Droid access, so it is necessary to start with a
-        #  Protocol Droid access character.
-        if CharacterAbility.PROTOCOL_DROID not in starting_abilities:
-            # Pick whichever character out of TC-14 and C-3PO is required for the least chapters, which is basically
-            # always TC-14 because TC-14 is only required for 1-1. The other characters with Protocol Droid access are
-            # 4-LOM and IG-88, which both have a bunch of extra abilities that it is better for the player to not start
-            # with.
-            tc14_count = self.character_chapter_access_counts.get("TC-14", 0)
-            c3po_count = self.character_chapter_access_counts.get("C-3PO", 0)
-            if tc14_count < c3po_count:
-                to_start_with = "TC-14"
-            elif c3po_count < tc14_count:
-                to_start_with = "C-3PO"
-            else:
-                to_start_with = self.random.choice(("TC-14", "C-3PO"))
-            self.push_precollected(self.create_item(to_start_with))
-            starting_abilities |= CharacterAbility.PROTOCOL_DROID
-            del possible_pool_character_items[to_start_with]
-
-        # todo: Logic currently assumes the player always has a Jedi, so it is necessary to start with a Jedi character.
-        if CharacterAbility.JEDI not in starting_abilities:
-            # Pick a Jedi that is not a requirement to access a chapter.
-            choices: list[CharacterData] = []
-            for char in CHARACTERS_AND_VEHICLES_BY_NAME.values():
-                if not char.is_sendable:
-                    # The character is not an AP item.
-                    continue
-                if CharacterAbility.JEDI not in char.abilities:
-                    # The character is not a Jedi.
-                    continue
-                assert isinstance(char, CharacterData), "Vehicles cannot be Jedi"
-                if CharacterAbility.SITH in char.abilities:
-                    # Skip Sith because they are rarer.
-                    continue
-                # todo: In the future, chapters may be locked by chapter unlock items rather than characters, so, when
-                #  the option for chapter unlock items is enabled, these characters should not be skipped.
-                if char.name in ALL_AREA_REQUIREMENT_CHARACTERS:
-                    # Skip characters used to unlock chapters.
-                    continue
-                choices.append(char)
-            starting_jedi = self.random.choice(choices)
-            starting_abilities |= starting_jedi.abilities
-            self.push_precollected(self.create_item(starting_jedi.name))
-            del possible_pool_character_items[starting_jedi.name]
+        for item in initial_starting_items:
+            starting_abilities |= item.abilities
 
         # Determine what abilities must be supplied by the item pool for all locations to be reachable with all items in
         # the item pool.
         required_character_abilities_in_pool = CharacterAbility.NONE
         optional_character_abilities = CharacterAbility.NONE
-        for shortname in chapters_with_locations:
+        # `chapters_with_locations` is a `set`, so sort for deterministic results from the `self.random` usage.
+        for shortname in sorted(chapters_with_locations):
             power_brick_abilities = POWER_BRICK_REQUIREMENTS[shortname][1]
             if power_brick_abilities is not None:
                 if isinstance(power_brick_abilities, tuple):
@@ -489,7 +520,8 @@ class LegoStarWarsTCSWorld(World):
                 else:
                     required_character_abilities_in_pool |= power_brick_abilities
             if self.options.enable_minikit_locations.value:
-                required_character_abilities_in_pool |= ALL_MINIKITS_REQUIREMENTS[shortname]
+                for requirements in SHORT_NAME_TO_CHAPTER_AREA[shortname].all_minikits_ability_requirements:
+                    required_character_abilities_in_pool |= requirements
         for bonus_name in self.enabled_bonuses:
             area = BONUS_NAME_TO_BONUS_AREA[bonus_name]
             required_character_abilities_in_pool |= area.completion_ability_requirements
@@ -511,14 +543,27 @@ class LegoStarWarsTCSWorld(World):
                             # Pick any one of the abilities to be required to be provided by the item pool.
                             picked = self.random.choice(any_ridable_ability_requirements)
                             required_character_abilities_in_pool |= picked
-        # Remove counts <= 0.
-        level_access_character_counts = +self.character_chapter_access_counts
-        for name in level_access_character_counts.keys():
-            abilities_provided_by_level_access = CHARACTERS_AND_VEHICLES_BY_NAME[name].abilities
-            # Characters with these abilities do not need to be explicitly added to the item pool because these
-            # abilities are provided by a character that is required to unlock a chapter.
-            required_character_abilities_in_pool &= ~abilities_provided_by_level_access
-            optional_character_abilities |= abilities_provided_by_level_access
+        if chapters_unlock_with_characters:
+            # Remove counts <= 0.
+            level_access_character_counts = +self.character_chapter_access_counts
+            for name in level_access_character_counts.keys():
+                abilities_provided_by_level_access = CHARACTERS_AND_VEHICLES_BY_NAME[name].abilities
+                # Characters with these abilities do not need to be explicitly added to the item pool because these
+                # abilities are provided by a character that is required to unlock a chapter.
+                required_character_abilities_in_pool &= ~abilities_provided_by_level_access
+                optional_character_abilities |= abilities_provided_by_level_access
+        else:
+            level_access_character_counts = Counter()
+            for chapter in sorted(self.enabled_chapters):
+                chapter_obj = SHORT_NAME_TO_CHAPTER_AREA[chapter]
+                # The item pool must provide the abilities require to complete the chapter.
+                required_character_abilities_in_pool |= chapter_obj.completion_main_ability_requirements
+                # Alternative requirements that swap out a common ability for a rarer ability are relevant to logic, but
+                # are not required to be included in the item pool.
+                alt_requirements = chapter_obj.completion_alt_ability_requirements
+                if alt_requirements:
+                    optional_character_abilities |= alt_requirements
+
         required_character_abilities_in_pool &= ~starting_abilities
         optional_character_abilities &= ~starting_abilities
 
@@ -527,7 +572,7 @@ class LegoStarWarsTCSWorld(World):
         # In larger worlds, it is unlikely for there to be any logically irrelevant abilities.
         logically_irrelevant_abilities = ~(required_character_abilities_in_pool | optional_character_abilities)
 
-        effective_item_classifications, effective_item_collect_extras = (
+        effective_item_classifications, effective_item_abilities = (
             self._get_effective_item_data(logically_irrelevant_abilities)
         )
         # These abilities are provided by the starting characters, so these abilities can be stripped from other
@@ -707,6 +752,9 @@ class LegoStarWarsTCSWorld(World):
         if self.options.goal_requires_kyber_bricks:
             extra_required_items.extend(("Kyber Brick",) * 7)
 
+        # As many Chapter Unlock items as there are enabled Chapters, excluding the starting chapter.
+        extra_required_items.extend(pool_required_chapter_unlock_items)
+
         free_location_count -= len(extra_required_items)
 
         unfilled_locations = self.multiworld.get_unfilled_locations(self.player)
@@ -799,7 +847,7 @@ class LegoStarWarsTCSWorld(World):
         created_item_names: set[str] = set()
 
         def create_item(item_name: str) -> LegoStarWarsTCSItem:
-            return self._create_item_ex(item_name, effective_item_classifications, effective_item_collect_extras)
+            return self._create_item_ex(item_name, effective_item_classifications, effective_item_abilities)
 
         def add_to_pool(item: LegoStarWarsTCSItem):
             item_pool.append(item)
@@ -1035,33 +1083,37 @@ class LegoStarWarsTCSWorld(World):
         # Give deprioritized + skip_balancing to characters with only common abilities, and that do not give access to
         # levels.
         non_level_access_character_items: list[LegoStarWarsTCSItem] = []
-        non_deprioritize_ability_counts: Counter[str] = Counter()
+        non_deprioritize_ability_counts: Counter[CharacterAbility] = Counter()
         for item in item_pool:
             if item.advancement and item.name in CHARACTERS_AND_VEHICLES_BY_NAME:
                 if progression_deprioritized_skip_balancing in item.classification:
                     # Don't count abilities from characters that are already deprioritized + skip_balancing.
                     continue
-                extra_collects = item.collect_extras
-                if extra_collects is not None:
-                    non_deprioritize_ability_counts.update(extra_collects)
-                if level_access_character_counts[item.name] == 0:
-                    assert extra_collects is not None, ("No extra collects should mean the character item is not"
-                                                        " progression currently if the character does not unlock"
-                                                        " levels")
+                abilities = item.abilities
+                if abilities:
+                    non_deprioritize_ability_counts.update(abilities)
+                if chapters_unlock_with_characters:
+                    if level_access_character_counts[item.name] == 0:
+                        assert abilities, ("No abilities should mean the character item is not progression currently if"
+                                           " the character does not unlock levels")
+                        non_level_access_character_items.append(item)
+                else:
                     non_level_access_character_items.append(item)
         self.random.shuffle(non_level_access_character_items)
         for item in non_level_access_character_items:
-            extra_collects = item.collect_extras
-            for extra_collect in extra_collects:
+            abilities = item.abilities
+            for ability in abilities:
                 # 3 is a magic number and could be changed if other values produce nicer results.
-                if non_deprioritize_ability_counts[extra_collect] <= 3:
+                if non_deprioritize_ability_counts[ability] <= 3:
                     # One of the abilities is uncommon.
                     break
             else:
                 # None of the abilities were uncommon, so add the deprioritize and skip balancing classifications.
                 item.classification |= progression_deprioritized_skip_balancing
-                # Reduce the remaining ability counts from non-deprioritized characters
-                non_deprioritize_ability_counts.subtract(extra_collects)
+                if abilities:
+                    # Reduce the remaining ability counts from non-deprioritized characters
+                    non_deprioritize_ability_counts.subtract(abilities)
+        assert all(ability.bit_count() == 1 for ability in non_deprioritize_ability_counts)
 
         self.multiworld.itempool.extend(item_pool)
 
@@ -1115,14 +1167,15 @@ class LegoStarWarsTCSWorld(World):
 
     def set_abilities_rule(self, spot: Location | Entrance, abilities: CharacterAbility):
         player = self.player
-        ability_names = cast(list[str], [ability.name for ability in abilities])
-        if len(ability_names) == 0:
+        abilities_as_int: int = abilities.value
+        if abilities_as_int == 0:
             set_rule(spot, Location.access_rule if isinstance(spot, Location) else Entrance.access_rule)
-        elif len(ability_names) == 1:
-            ability_name = ability_names[0]
-            set_rule(spot, lambda state: state.has(ability_name, player))
+        elif abilities_as_int.bit_count == 1:
+            # There is only 1 bit, so a match is all that is needed.
+            set_rule(spot, lambda state: state.count("COMBINED_ABILITIES", player) & abilities_as_int)
         else:
-            set_rule(spot, lambda state: state.has_all(ability_names, player))
+            # There are multiple bits, so all bits need to be present.
+            set_rule(spot, lambda state: state.count("COMBINED_ABILITIES", player) & abilities_as_int == abilities_as_int)
 
     def set_any_abilities_rule(self, spot: Location | Entrance, *any_abilities: CharacterAbility):
         for any_ability in any_abilities:
@@ -1138,17 +1191,46 @@ class LegoStarWarsTCSWorld(World):
             self.set_abilities_rule(spot, next(iter(any_abilities_set)))
         else:
             sorted_abilities = sorted(any_abilities_set, key=lambda a: (a.bit_count(), a.value))
-            ability_names = [cast(list[str], [a.name for a in any_ability]) for any_ability in sorted_abilities]
-            if all(len(names) == 1 for names in ability_names):
-                # Optimize for all abilities being only a single flag each.
-                singular_names = {names[0] for names in ability_names}
-                set_rule(spot, lambda state, items_=tuple(singular_names), p=self.player: state.has_any(items_, p))
-            else:
+            abilities_as_ints: list[int] = [any_ability.value for any_ability in sorted_abilities]
+            if all(ability_as_int.bit_count() == 1 for ability_as_int in abilities_as_ints):
+                # Optimize for all abilities being only a single bit each.
+                single_bit_abilities = 0
+                for ability_as_int in abilities_as_ints:
+                    single_bit_abilities |= ability_as_int
+                # Any bit matching is all that is needed.
+                set_rule(spot, lambda state, p=self.player: state.count("COMBINED_ABILITIES", p) & single_bit_abilities)
+            elif all(ability_as_int.bit_count() > 1 for ability_as_int in abilities_as_ints):
+                # Optimize for all abilities being multiple bits each.
                 def rule(state: CollectionState):
-                    for names in ability_names:
-                        if state.has_all(names, self.player):
+                    combined_abilities = state.count("COMBINED_ABILITIES", self.player)
+                    for ability_as_int in abilities_as_ints:
+                        # All the bits in the ability need to be present.
+                        if combined_abilities & ability_as_int == ability_as_int:
                             return True
                     return False
+
+                set_rule(spot, rule)
+            else:
+                # I am unsure if this is faster than pretending all abilities have multiple bits.
+                single_bit_abilities = 0
+                multi_bit_abilities = []
+                for ability_as_int in abilities_as_ints:
+                    if ability_as_int.bit_count() == 1:
+                        single_bit_abilities |= ability_as_int
+                    else:
+                        multi_bit_abilities.append(ability_as_int)
+
+                def rule(state: CollectionState):
+                    combined_abilities = state.count("COMBINED_ABILITIES", self.player)
+                    if combined_abilities & single_bit_abilities:
+                        # Any 1 of the bits matching is enough because each ability to check here is only a single bit.
+                        return True
+                    for ability_as_int in multi_bit_abilities:
+                        # All the bits in the ability need to be present.
+                        if combined_abilities & ability_as_int == ability_as_int:
+                            return True
+                    return False
+
                 set_rule(spot, rule)
 
     def _get_score_multiplier_requirement(self, studs_cost: int):
@@ -1197,6 +1279,12 @@ class LegoStarWarsTCSWorld(World):
                                  self.options.episode_unlock_requirement)
 
             # Set chapter requirements.
+            if self.options.chapter_unlock_requirement == ChapterUnlockRequirement.option_story_characters:
+                story_characters_for_chapters = True
+            elif self.options.chapter_unlock_requirement == ChapterUnlockRequirement.option_chapter_item:
+                story_characters_for_chapters = False
+            else:
+                raise Exception(f"Unexpected ChapterUnlockRequirement: {self.options.chapter_unlock_requirement}")
             episode_chapters = EPISODE_TO_CHAPTER_AREAS[episode_number]
             for chapter_number, chapter in enumerate(episode_chapters, start=1):
                 assert chapter.episode == episode_number
@@ -1205,28 +1293,62 @@ class LegoStarWarsTCSWorld(World):
                     continue
                 entrance = self.get_entrance(f"Episode {episode_number} Room, Chapter {chapter_number} Door")
 
-                required_character_names = CHAPTER_AREA_STORY_CHARACTERS[chapter.short_name]
-                if required_character_names:
+                is_goal_chapter_without_locations = (
+                        chapter.short_name == self.goal_chapter
+                        and self.options.goal_chapter_locations_mode == GoalChapterLocationsMode.option_removed
+                )
+
+                if story_characters_for_chapters:
+                    required_character_names = CHAPTER_AREA_STORY_CHARACTERS[chapter.short_name]
+                    entrance_abilities = CharacterAbility.NONE
+                    for character_name in required_character_names:
+                        generic_character = CHARACTERS_AND_VEHICLES_BY_NAME[character_name]
+                        entrance_abilities |= generic_character.abilities
+
                     if len(required_character_names) == 1:
-                        item = next(iter(required_character_names))
-                        set_rule(entrance, lambda state, item_=item: state.has(item_, player))
+                        character_name = next(iter(required_character_names))
+                        set_rule(entrance, lambda state, item_=character_name: state.has(item_, player))
+                    elif len(required_character_names) > 1:
+                        character_names = tuple(sorted(required_character_names))
+                        set_rule(entrance, lambda state, items_=character_names: state.has_all(items_, player))
+                    # Even if some of the abilities are chapter-specific, it doesn't matter, the player needs all of
+                    # these characters to access the chapter at all, and will therefore have access to all their
+                    # combined abilities, chapter-specific abilities included.
+                    strictly_required_entrance_abilities = entrance_abilities
+                    assert (set(chapter.completion_main_ability_requirements)
+                            <= set(strictly_required_entrance_abilities)), \
+                        ("The main abilities were not a subset of the character abilities. The main abilities should be"
+                         " calculated from the character abilities, with chapter-specific abilities removed besides the"
+                         " chapter-specific abilities of this chapter, so something is wrong.")
+                else:
+                    # The entrance requires a 'Chapter Unlock' item.
+                    # The logic is not fully prepared for this currently, so the entrance rule is also set to require
+                    # all the logical abilities of the Story characters of the Chapter, which will be overly
+                    # restrictive for many locations, but overly restrictive logic cannot result in impossible seeds.
+                    # A few chapters have chapter-specific logical requirements that get stripped from the requirements
+                    # of other chapters.
+                    main_ability_requirements = chapter.completion_main_ability_requirements
+                    alt_ability_requirements = chapter.completion_alt_ability_requirements
+                    if alt_ability_requirements:
+                        self.set_any_abilities_rule(entrance, main_ability_requirements, alt_ability_requirements)
+                        strictly_required_entrance_abilities = main_ability_requirements & alt_ability_requirements
                     else:
-                        items = tuple(sorted(required_character_names))
-                        set_rule(entrance, lambda state, items_=items: state.has_all(items_, player))
+                        self.set_abilities_rule(entrance, main_ability_requirements)
+                        strictly_required_entrance_abilities = main_ability_requirements
 
-                if (chapter.short_name == self.goal_chapter
-                        and self.options.goal_chapter_locations_mode == GoalChapterLocationsMode.option_removed):
-                    # There are no locations, so there is no logic.
+                    add_rule(entrance,
+                             lambda state, item_=f"{episode_number}-{chapter_number} Unlock": state.has(item_, player))
+                    # TODO: .levels.HAT_MACHINE_CHAPTERS provides alternative logic to Hat Machine logic abilities.
+                    #  Levels should be accessible with either the hat machine logic, or the ability logic.
+
+                if is_goal_chapter_without_locations:
+                    # There are no locations, so there is no additional logic to add.
                     continue
-
-                entrance_abilities = CharacterAbility.NONE
-                for character_name in required_character_names:
-                    generic_character = CHARACTERS_AND_VEHICLES_BY_NAME[character_name]
-                    entrance_abilities |= generic_character.abilities
 
                 def set_chapter_spot_abilities_rule(spot: Location | Entrance, *abilities: CharacterAbility):
                     # Remove any requirements already satisfied by the chapter entrance before setting the rule.
-                    self.set_any_abilities_rule(spot, *[ability & ~entrance_abilities for ability in abilities])
+                    self.set_any_abilities_rule(
+                        spot, *[ability & ~strictly_required_entrance_abilities for ability in abilities])
 
                 # Set Power Brick logic. Score multiplier requirements are added later.
                 power_brick = self.get_location(chapter.power_brick_location_name)
@@ -1235,7 +1357,7 @@ class LegoStarWarsTCSWorld(World):
                 # Set Minikits logic
                 if self.options.enable_minikit_locations:
                     all_minikits_entrance = self.get_entrance(f"{chapter.name} - Collect All Minikits")
-                    set_chapter_spot_abilities_rule(all_minikits_entrance, chapter.all_minikits_ability_requirements)
+                    set_chapter_spot_abilities_rule(all_minikits_entrance, *chapter.all_minikits_ability_requirements)
 
                 # Set True Jedi logic
                 if self.options.enable_true_jedi_locations and not self.options.easier_true_jedi:
@@ -1285,8 +1407,6 @@ class LegoStarWarsTCSWorld(World):
                          lambda state, p=player: state.has("Episode Completion Token", p, 6))
 
         # Cantina Ridesanity.
-        # todo: Currently there are no rules because the player is always forced to start with a Jedi, but there will be
-        #  rules in the future because (most) droids cannot ride things.
         for spot, ability_requirements in self.ridesanity_spots.get("cantina", ()):
             self.set_any_abilities_rule(spot, *ability_requirements)
 
@@ -1375,20 +1495,40 @@ class LegoStarWarsTCSWorld(World):
         progitempool.sort(key=sort_func)
 
     def collect(self, state: CollectionState, item: LegoStarWarsTCSItem) -> bool:
-        changed = super().collect(state, item)
-        if changed:
-            extras = item.collect_extras
-            if extras is not None:
-                state.prog_items[self.player].update(extras)
+        if super().collect(state, item):
+            abilities_as_int = item.collect_abilities_int
+            if abilities_as_int is not None:
+                # The collected item has abilities, so collect them into the state too.
+                player_prog = state.prog_items[self.player]
+                player_prog["COMBINED_ABILITIES"] |= abilities_as_int
+                # state.prog_items is typed as Counter[str], but `abilities_as_int` is an `int`, so this is technically
+                # not allowed, but works for now.
+                player_prog[abilities_as_int] += 1
             return True
         return False
 
     def remove(self, state: CollectionState, item: LegoStarWarsTCSItem) -> bool:
-        changed = super().remove(state, item)
-        if changed:
-            extras = item.collect_extras
-            if extras is not None:
-                state.prog_items[self.player].subtract(extras)
+        if super().remove(state, item):
+            abilities_as_int = item.collect_abilities_int
+            if abilities_as_int is not None:
+                # The removed item has abilities, so remove them from the state too.
+                player_prog = state.prog_items[self.player]
+                current_abilities_int_count = player_prog[abilities_as_int]
+                if current_abilities_int_count == 1:
+                    del player_prog[abilities_as_int]
+                    new_combined_abilities = 0
+                    key: int | str
+                    # This is not fast, but `remove()` is barely ever called by Core AP.
+                    # If it is needed to make this faster, then TCS could stop abusing `state.prog_items`, and put its
+                    # own `state.tcs_abilities` on the state instead as a `Counter[int, int]`.
+                    for key in player_prog:
+                        if type(key) is int:
+                            new_combined_abilities |= key
+                    player_prog["COMBINED_ABILITIES"] = new_combined_abilities
+                else:
+                    # At least one other collected item is providing the same combination of abilities, so the combined
+                    # abilities won't have changed.
+                    player_prog[abilities_as_int] = current_abilities_int_count - 1
             return True
         return False
 
@@ -1405,6 +1545,7 @@ class LegoStarWarsTCSWorld(World):
             "enabled_bosses": self.enabled_bosses,
             "goal_area_completion_count": self.goal_area_completion_count,
             "goal_chapter": self.goal_chapter,
+            "item_colors": self.options.item_colors_to_slot_data(),
             **self.options.as_dict(
                 "received_item_messages",
                 "checked_location_messages",
@@ -1434,6 +1575,7 @@ class LegoStarWarsTCSWorld(World):
                 "death_link_studs_loss_scaling",
                 "ridesanity",
                 "enable_starting_extras_locations",
+                "chapter_unlock_requirement",
             )
         }
 

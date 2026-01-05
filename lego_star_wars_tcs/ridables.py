@@ -99,21 +99,64 @@ RIDABLES_REQUIREMENTS: dict[str, dict[str, tuple[CharacterAbility, ...]]] = {
         # The car is at the end of a hallway that needs a Bounty Hunter or Imperial to access.
         # A Protocol Droid Panel must be used to remove a force field, and a Jedi must be used to spawn the plants that
         # spawn the Town Car bricks when destroyed.
-        "Town Car": (CharacterAbility.BOUNTY_HUNTER, CharacterAbility.IMPERIAL),
+        "Town Car": (
+            CharacterAbility.JEDI | CharacterAbility.BOUNTY_HUNTER,
+            CharacterAbility.JEDI | CharacterAbility.IMPERIAL,
+        ),
     },
     "LEGO City": {
-        # The car is hidden within Silver Bricks.
-        "Moon Car": (CharacterAbility.BOUNTY_HUNTER,),
+        # The car is hidden within Silver Bricks, and then needs to be built.
+        "Moon Car": (CharacterAbility.BOUNTY_HUNTER | CharacterAbility.CAN_BUILD_BRICKS,),
+        # To access the first part, levers need to be pulled, then force is needed to move a part into place, and build
+        # bricks is needed to build the final part.
+        "Wookie Flyer": (CharacterAbility.JEDI | CharacterAbility.CAN_BUILD_BRICKS | CharacterAbility.CAN_PULL_LEVERS,),
+        # A house needs to be destroyed to reveal the parts and then a Jedi is needed to assemble the AT-ST.
+        "AT-ST": (CharacterAbility.JEDI | CharacterAbility.CAN_ATTACK_UP_CLOSE,),
+        # A house needs to be destroyed to reveal the parts and then the Tractor needs to be built.
+        "Tractor": (CharacterAbility.CAN_ATTACK_UP_CLOSE, CharacterAbility.CAN_BUILD_BRICKS,),
+        # Either The AT-ST or a Bounty Hunter can destroy the obstacles in the way of getting to the Landspeeder.
+        "Landspeeder": (
+            CharacterAbility.JEDI | CharacterAbility.CAN_ATTACK_UP_CLOSE,
+            CharacterAbility.BOUNTY_HUNTER,
+        ),
+        # There are Dewbacks and Banthas close enough to the fences that there is no requirement to destroy or jump over
+        # the fences. The CharacterAbility.CAN_RIDE_VEHICLES that is added to every Ridable location is enough to
+        # guarantee that the player has at least one character that can enter LEGO City.
     },
     "New Town": {
-        # The car is hidden within Silver Bricks.
-        "Moon Car": (CharacterAbility.BOUNTY_HUNTER,),
+        # The car is hidden within Silver Bricks and then must be built.
+        "Moon Car": (CharacterAbility.BOUNTY_HUNTER | CharacterAbility.CAN_BUILD_BRICKS,),
+        # The boat needs fixing.
+        "Lifeboat": (CharacterAbility.CAN_BUILD_BRICKS,),
+        # The house and bins need destroying, and then the car needs to be built.
+        "Town Car": (CharacterAbility.CAN_ATTACK_UP_CLOSE | CharacterAbility.CAN_BUILD_BRICKS,),
+        # A small building needs to be destroyed, and then the tractor needs to be built.
+        "Tractor": (CharacterAbility.CAN_ATTACK_UP_CLOSE | CharacterAbility.CAN_BUILD_BRICKS,),
+        # There is a Tauntaun just barely close enough to the fence that there is no need for a character that can jump
+        # or destroy the fences, though all characters that can ride vehicles can also jump.
+    },
+    "cantina": {
+        # There are two cars, one is accessed by destroying garbage cans and then building it, and the other is accessed
+        # by pulling a lever.
+        "Cantina Car": (
+            CharacterAbility.CAN_ATTACK_UP_CLOSE | CharacterAbility.CAN_BUILD_BRICKS,
+            CharacterAbility.CAN_PULL_LEVERS,
+        )
     }
 }
+assert all(ridable in RIDABLES_BY_NAME
+           for chapter_ridables in RIDABLES_REQUIREMENTS.values()
+           for ridable in chapter_ridables)
 
 
 def get_ridable_requirements(chapter_short_name_or_bonus: str, ridable_name: str) -> tuple[CharacterAbility, ...]:
-    return RIDABLES_REQUIREMENTS.get(chapter_short_name_or_bonus, {}).get(ridable_name, ())
+    # todo: Requiring CAN_RIDE_VEHICLES is not strictly necessary currently because the player is always forced to start
+    #  with a Jedi.
+    requirements = RIDABLES_REQUIREMENTS.get(chapter_short_name_or_bonus, {}).get(ridable_name, ())
+    if not requirements:
+        return (CharacterAbility.CAN_RIDE_VEHICLES,)
+    else:
+        return tuple(CharacterAbility.CAN_RIDE_VEHICLES | ability for ability in requirements)
 
 
 def _make_lookups() -> tuple[dict[str, list[Ridable]], dict[str, list[Ridable]]]:

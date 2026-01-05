@@ -25,7 +25,6 @@ Stud and Power Up items are added to the item pool to fill out the rest of the i
 ### Locations
 
 Making purchases from the Characters or Extras shop are locations to check.
-The Extras that can be purchased without collecting a Power Brick are not currently location checks.
 
 Completing an Episode Chapter in Free Play is a location to check. Additional checks can be sent for each Story mode
 character that would have been unlocked if the Chapter had been completed in Story mode.
@@ -34,13 +33,15 @@ Completing the True Jedi for a Chapter can be a location to check.
 
 Every 1-10 number of Minikits collected in a Chapter can be a check.
 
-Completing Bonus levels and watching the Indiana Jones trailer can be locations to check.
+Completing Bonus levels and watching the Indiana Jones trailer can be locations to check. Additional checks can be sent
+for each Story mode character that would have been unlocked if the Bonus had been completed in vanilla.
 
 Riding unique creatures/turrets/vehicles can be locations to check.
 
 ## What other changes are made to the game?
 
-Purchases in the Characters shop and Extras shop will not award their vanilla Characters/Extras.
+Purchases in the Characters shop and Extras shop will not award their vanilla Characters/Extras and will display the
+name and classification of the item that is at that shop slot.
 
 Slots in the Characters shop that would normally unlock upon completing Story mode in every Chapter have been changed to
 either unlock once all enabled Episodes are unlocked, or once 6 'Episode Completion Token' items have been received.
@@ -48,7 +49,8 @@ The unlock condition is controlled by an option in the game yaml.
 
 ## What does another world's item look like in Lego Star Wars: The Complete Saga?
 
-All items display as they would in vanilla.
+All items display as they would in vanilla. The names of items in the Characters shop and Extras shop show the
+Archipelago item that will be sent when making the purchase.
 
 ## When the player receives an item, what happens?
 
@@ -60,8 +62,9 @@ save file's total accumulated Studs. The received studs are multiplied by your m
 multiplied by a further 2x for characters with a Power Up active (double score zones do not affect received studs
 currently).
 
-Power Ups automatically activate while in a level where Power Ups are relevant. Additional Power Ups will queue up, but
-all queued Power Ups will be lost once the current game session ends.
+Power Ups automatically activate while in a level where Power Ups are relevant. Additional Power Ups will queue up and
+activate automatically just before your current Power Up runs out, but all queued Power Ups will be lost once the
+current game session ends.
 
 ## Can I play offline?
 
@@ -76,9 +79,8 @@ performing that action.
 
 ### Logic
 
-The logic is quite basic and may be overly restrictive (you can get a lot of Minikit checks out-of-logic). Work is
-ongoing to rewrite the logic to fix issues and enable more randomization options, such as individual Minikit logic and
-different unlock requirements for Chapters.
+The logic is quite basic and may be overly restrictive (you can get a lot of checks out-of-logic). Work is ongoing to
+rewrite the logic to fix issues and enable more randomization options, such as individual Minikit logic.
 
 ### Cantina Episode door lights
 
@@ -87,13 +89,6 @@ Episode door won't change to green, but the door can still be entered normally. 
 time you enter the main room of the Cantina.
 
 This will happen whenever your starting Chapter is from any Episode other than Episode 1.
-
-### Starting Characters
-
-Characters are added to starting inventory to be able to access the starting Chapter. The world's current logic assumes
-the player has a Jedi and a Protocol droid because the logic was designed around always starting with 1-1, so if the
-starting characters do not include a Jedi and a Protocol Droid, a Jedi and/or a Protocol Droid (usually TC-14) will be
-added to the starting characters.
 
 ### Player 2 picking locked characters
 

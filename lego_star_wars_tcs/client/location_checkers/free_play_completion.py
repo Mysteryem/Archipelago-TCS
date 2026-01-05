@@ -123,7 +123,7 @@ class FreePlayChapterCompletionChecker(ClientComponent):
         for area in CHAPTER_AREAS:
             chapter_locations = [STATUS_LEVEL_ID_TO_AP_ID[area.status_level_id]]
             for story_character in area.character_requirements:
-                loc_name = f"Chapter Completion - Unlock {story_character}"
+                loc_name = f"Level Completion - Unlock {story_character}"
                 chapter_locations.append(LOCATION_NAME_TO_ID[loc_name])
             enabled_chapter_locations = [loc_id for loc_id in chapter_locations if loc_id in ctx.server_locations]
             # Determine if a chapter is enabled by whether any of the chapter locations exist.

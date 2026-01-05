@@ -95,7 +95,7 @@ def _characters_to_shop_address() -> dict[MemoryOffset, dict[BitMask, ApLocation
             continue
         byte_offset = character.shop_slot // 8
         bit_mask = 1 << (character.shop_slot % 8)
-        location_name = f"Purchase {character.name}"
+        location_name = character.purchase_location_name
         assert location_name in LOCATION_NAME_TO_ID, f"ERROR: {location_name} is not a location name"
         location_id = LOCATION_NAME_TO_ID[location_name]
         per_byte.setdefault(byte_offset, {})[bit_mask] = location_id

@@ -47,7 +47,7 @@ _ITEM_DATA_BY_ID_PLUS_GOAL_SPECIAL[_SUB_GOAL_SPECIAL_ID] = GenericItemData(_SUB_
 
 
 class UnlockedChapterManager(ClientComponent):
-    character_to_dependent_game_chapters: dict[int, list[str]]
+    ap_item_id_to_dependent_game_chapters: dict[int, list[str]]
     remaining_chapter_item_requirements: dict[str, set[int]]
 
     unlocked_chapters_per_episode: dict[int, set[AreaId]]
@@ -63,7 +63,7 @@ class UnlockedChapterManager(ClientComponent):
     last_area_door: ChapterArea | None = None
 
     def __init__(self) -> None:
-        self.character_to_dependent_game_chapters = {}
+        self.ap_item_id_to_dependent_game_chapters = {}
         self.remaining_chapter_item_requirements = {}
         self.unlocked_chapters_per_episode = {}
         self.enabled_chapter_area_ids = set()
@@ -92,6 +92,12 @@ class UnlockedChapterManager(ClientComponent):
             self.scale_true_jedi_with_score_multipliers = False
         else:
             self.scale_true_jedi_with_score_multipliers = bool(slot_data["scale_true_jedi_with_score_multipliers"])
+
+        # In older multiworlds, chapters were always unlocked through Story Characters.
+        if event.generator_version < (1, 3, 0):
+            chapter_unlock_requirement = options.ChapterUnlockRequirement.option_story_characters
+        else:
+            chapter_unlock_requirement = slot_data["chapter_unlock_requirement"]
 
         num_enabled_episodes = len(enabled_episodes)
 
@@ -147,14 +153,23 @@ class UnlockedChapterManager(ClientComponent):
         for chapter_area in CHAPTER_AREAS:
             if chapter_area.area_id not in self.enabled_chapter_area_ids:
                 continue
-            character_requirements = chapter_area.character_requirements
+
+            item_requirements: list[str]
+            if chapter_unlock_requirement == options.ChapterUnlockRequirement.option_story_characters:
+                item_requirements = list(chapter_area.character_requirements)
+            elif chapter_unlock_requirement == options.ChapterUnlockRequirement.option_chapter_item:
+                item_requirements = [f"{chapter_area.short_name} Unlock"]
+            else:
+                raise ValueError(f"Unexpected ChapterUnlockRequirement with value {chapter_unlock_requirement}")
+
             episode = chapter_area.episode
             if episode_unlock_requirement == options.EpisodeUnlockRequirement.option_episode_item:
-                item_requirements = [f"Episode {episode} Unlock", *character_requirements]
+                item_requirements.append(f"Episode {episode} Unlock")
             elif episode_unlock_requirement == options.EpisodeUnlockRequirement.option_open:
-                item_requirements = list(character_requirements)
+                pass
             else:
                 raise RuntimeError(f"Unexpected EpisodeUnlockRequirement: {episode_unlock_requirement}")
+
             code_requirements = set()
             for item_name in item_requirements:
                 item_code = ITEM_DATA_BY_NAME[item_name].code
@@ -163,14 +178,14 @@ class UnlockedChapterManager(ClientComponent):
                 code_requirements.add(item_code)
             remaining_chapter_item_requirements.setdefault(chapter_area.short_name, set()).update(code_requirements)
 
-        self.character_to_dependent_game_chapters = item_id_to_chapter_area_short_name
+        self.ap_item_id_to_dependent_game_chapters = item_id_to_chapter_area_short_name
         self.remaining_chapter_item_requirements = remaining_chapter_item_requirements
 
     def on_sub_goal_completion(self, ctx: TCSContext):
-        self.on_character_or_episode_unlocked(ctx, _SUB_GOAL_SPECIAL_ID)
+        self.on_character_or_chapter_or_episode_unlocked(ctx, _SUB_GOAL_SPECIAL_ID)
 
-    def on_character_or_episode_unlocked(self, ctx: TCSContext, ap_item_id: int):
-        dependent_chapters = self.character_to_dependent_game_chapters.get(ap_item_id)
+    def on_character_or_chapter_or_episode_unlocked(self, ctx: TCSContext, ap_item_id: int):
+        dependent_chapters = self.ap_item_id_to_dependent_game_chapters.get(ap_item_id)
         if dependent_chapters is None:
             return
 
@@ -197,7 +212,7 @@ class UnlockedChapterManager(ClientComponent):
                     ctx.text_display.priority_messages(msg, msg)
                 del self.remaining_chapter_item_requirements[dependent_area_short_name]
 
-        del self.character_to_dependent_game_chapters[ap_item_id]
+        del self.ap_item_id_to_dependent_game_chapters[ap_item_id]
 
     def unlock_chapter(self, chapter_area: ChapterArea):
         self.unlocked_chapters_per_episode[chapter_area.episode].add(chapter_area.area_id)
