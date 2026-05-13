@@ -8,7 +8,7 @@ from ....constants import CharacterAbility
 P_C_DATA_LIST = StaticPointer(0x93b294)
 UNKNOWN_LOADED_CHARACTER_DATA_SIZE = 0x4c
 # UnknownLoadedCharacterData.data_flag3
-CHARACTER_DATA_FLAG_3 = UintField(0x4c)
+CHARACTER_DATA_FLAG_3 = UintField(0x4)
 
 P_GC_DATA_LIST = StaticPointer(0x93b2a4)
 CHARACTER_ENTRY_SIZE = 0x120
