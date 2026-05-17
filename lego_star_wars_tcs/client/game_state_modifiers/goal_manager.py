@@ -1,6 +1,6 @@
 import logging
 from itertools import cycle
-from time import perf_counter_ns
+from time import monotonic_ns
 from typing import Mapping, Literal, Iterator
 
 from .text_replacer import TextId
@@ -320,7 +320,7 @@ class GoalManager(ClientComponent):
                 updated_message = goal_strings[first_key]
             else:
                 updated_message = suffix_message + "Error, no goals found"
-            self._last_paused_goal_string_cycle = perf_counter_ns()
+            self._last_paused_goal_string_cycle = monotonic_ns()
         else:
             assert last_cycle is not None
             assert last_cycle in goal_strings
@@ -386,7 +386,7 @@ class GoalManager(ClientComponent):
         if not self._paused_goal_strings:
             return
 
-        now = perf_counter_ns()
+        now = monotonic_ns()
         if now > self._last_paused_goal_string_cycle + GOAL_TEXT_CYCLE_COOLDOWN_NS:
             next_paused_key = next(self._paused_goal_string_key_cycle)
             event.context.text_replacer.suffix_custom_string(TextId.PAUSED, self._paused_goal_strings[next_paused_key])

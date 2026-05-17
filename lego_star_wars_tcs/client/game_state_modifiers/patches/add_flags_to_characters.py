@@ -56,12 +56,21 @@ async def set_droideka_as_tightrope_tilt(ctx: TCSContext):
     CHARACTER_ENTRY_FLAG_2.set(ctx, addr_character_entry, new_flag)
 
 
-async def set_can_zap_characters_as_got_batarang(ctx: TCSContext):
-    # Give Zapper characters the GOT_BATARANG flag, which a custom category is added for,
-    # so that a character that can Zap is always picked, if one is unlocked.
+async def set_can_remove_droideka_shields_characters_as_got_batarang(ctx: TCSContext):
+    # Give characters that can remove droideka shields the GOT_BATARANG flag, which a custom category is added for,
+    # so that a character that can remove droideka shields is always picked, if one is unlocked.
+    can_zap = {CHARACTERS_AND_VEHICLES_BY_NAME[character].character_index
+               for character in ("R2-D2", "R4-P17", "Watto", "Jawa", "Ugnaught", "R2-Q5")}
+    bounty_or_jedi = {
+        character.character_index for character in CHARACTERS_AND_VEHICLES_BY_NAME.values() if
+        CharacterAbility.BOUNTY_HUNTER in character.abilities or CharacterAbility.JEDI in character.abilities
+    }
+    can_remove_droideka_shields = {CHARACTERS_AND_VEHICLES_BY_NAME["Droideka"].character_index}
+    can_remove_droideka_shields.update(can_zap)
+    can_remove_droideka_shields.update(bounty_or_jedi)
+
     array = P_GC_DATA_LIST.to_array(ctx, CHARACTER_ENTRY_SIZE)
-    for character in ("R2-D2", "R4-P17", "Watto", "Jawa", "Ugnaught", "R2-Q5"):
-        character_index = CHARACTERS_AND_VEHICLES_BY_NAME[character].character_index
+    for character_index in can_remove_droideka_shields:
         addr_character_entry = array[character_index]
         character_entry_flag = CHARACTER_ENTRY_FLAG_2.get(ctx, addr_character_entry)
         new_flag = character_entry_flag | CharacterEntryFlag2.GOT_BATARANG.value

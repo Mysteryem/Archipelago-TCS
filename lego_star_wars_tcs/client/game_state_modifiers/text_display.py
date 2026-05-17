@@ -1,6 +1,6 @@
 import logging
 from collections import deque
-from time import perf_counter_ns
+from time import monotonic_ns
 
 from . import ClientComponent
 from ..events import subscribe_event, OnGameWatcherTickEvent
@@ -19,8 +19,8 @@ WAIT_BETWEEN_MESSAGES_NS = WAIT_BETWEEN_MESSAGES_SECONDS * 1_000_000_000
 
 
 class InGameTextDisplay(ClientComponent):
-    next_allowed_message_time: int = -1
-    next_allowed_clean_time: int = -1
+    next_allowed_message_time: int
+    next_allowed_clean_time: int
     # If the last write to memory was a custom message.
     memory_dirty: bool = False
 
@@ -28,6 +28,9 @@ class InGameTextDisplay(ClientComponent):
 
     def __init__(self):
         self.message_queue = deque()
+        now = monotonic_ns()
+        self.next_allowed_message_time = now
+        self.next_allowed_clean_time = now
 
     def queue_message(self, message: str):
         self.message_queue.append(message)
@@ -55,7 +58,7 @@ class InGameTextDisplay(ClientComponent):
         ctx.write_float(DOUBLE_SCORE_ZONE_TIMER_ADDRESS, display_duration_s)
 
         # Update for the next time that a new message can be displayed.
-        now = perf_counter_ns()
+        now = monotonic_ns()
         self.next_allowed_message_time = now + next_message_delay_ns
         self.next_allowed_clean_time = max(now + int((display_duration_s + 1) * 1_000_000_000),
                                            self.next_allowed_message_time)
@@ -68,7 +71,7 @@ class InGameTextDisplay(ClientComponent):
 
     @subscribe_event
     async def update_game_state(self, event: OnGameWatcherTickEvent) -> None:
-        now = perf_counter_ns()
+        now = monotonic_ns()
         if now < self.next_allowed_message_time:
             return
 
