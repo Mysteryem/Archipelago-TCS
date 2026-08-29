@@ -12,7 +12,7 @@ future.
 ## Optional Software
 - [Lego Star Wars: The Complete Saga Archipelago Tracker](https://github.com/Mysteryem/TCS_AP_PopTracker/releases/latest), 
 for use with [PopTracker](https://github.com/black-sliver/PopTracker/releases)
-- [Dxwnd](https://dxwnd.org/) to play in a window instead of fullscreen (works better with the GOG version of the game)
+- [Dxwnd](https://sourceforge.net/projects/dxwnd/) to play in a window instead of fullscreen (works better with the GOG version of the game)
   - In Dxwnd, use `File`>`Import`, and then open the `Lego Star Wars - The Complete Saga` file in the `DxWnd\exports`
 folder. After importing, right click and `Modify`, then adjust the `Path` to your `LEGOStarWarsSaga.exe` and adjust the
 window size to your liking (`W` and `H` in `Main`>`Position`>`Window initial position & size`)
