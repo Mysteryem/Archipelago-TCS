@@ -162,7 +162,7 @@ class Area(IntEnum):
         return AreaFlag.NO_GOLD_BRICK not in self.flags
 
     def prefix_name(self, name: str) -> str:
-        return f"{self.readable_name} - {name}"
+        return f"{self.get_long_name()} - {name}"
 
     def get_true_jedi_name(self) -> str:
         return self.prefix_name("True Jedi")
@@ -201,8 +201,7 @@ class Area(IntEnum):
         if self.is_chapter():
             return f"{self.readable_name} ({self.get_short_name()})"
         # LOSTTEMPLE is not locked behind a gold brick door.
-        # ANEWHOPE already has (Bonus Level) in its .readable_name to help tell it apart from Episode IV - A New Hope.
-        elif self.is_bonus_room_bonus() and self is not Area.LOSTTEMPLE and self is not Area.ANEWHOPE:
+        elif self.is_bonus_room_bonus() and self is not Area.LOSTTEMPLE:
             return f"{self.readable_name} (Gold Brick Bonus)"
         else:
             return self.readable_name
@@ -256,7 +255,7 @@ class Area(IntEnum):
     E3ENDING =         26, dict(episode_index= 2, area_index= 6, readable_name=           "Episode 3 Ending", flags=AreaFlag(0x0002), story_true_jedi=    0, free_play_true_jedi=     0, extra=                         None, levels=[Level.EP3_ENDING_MEDICROOM, Level.EP3_ENDING_MUSTAFAR, Level.EP3_ENDING_VADER])
     E3CHARACTERBONUS = 27, dict(episode_index= 2, area_index= 7, readable_name=  "Episode 3 Character Bonus", flags=AreaFlag(0x0004), story_true_jedi=    0, free_play_true_jedi=     0, extra=                         None, levels=[Level.E3CHARACTERBONUS_A, Level.E3CHARACTERBONUS_STATUS])
     E3VEHICLEBONUS =   28, dict(episode_index= 2, area_index= 8, readable_name=    "Episode 3 Minikit Bonus", flags=AreaFlag(0x0005), story_true_jedi=    0, free_play_true_jedi=     0, extra=                         None, levels=[Level.E3VEHICLEBONUS_A, Level.E3VEHICLEBONUS_STATUS])
-    ANEWHOPE =         29, dict(episode_index=-1, area_index=-1, readable_name=   "A New Hope (Bonus Level)", flags=AreaFlag(0x0000), story_true_jedi=40000, free_play_true_jedi= 70000, extra=                         None, levels=[Level.ANEWHOPE_INTRO, Level.ANEWHOPE_A, Level.ANEWHOPE_B, Level.ANEWHOPE_STATUS])
+    ANEWHOPE =         29, dict(episode_index=-1, area_index=-1, readable_name=                 "A New Hope", flags=AreaFlag(0x0000), story_true_jedi=40000, free_play_true_jedi= 70000, extra=                         None, levels=[Level.ANEWHOPE_INTRO, Level.ANEWHOPE_A, Level.ANEWHOPE_B, Level.ANEWHOPE_STATUS])
     BLOCKADERUNNER =   30, dict(episode_index= 3, area_index= 0, readable_name=               "Secret Plans", flags=AreaFlag(0x0010), story_true_jedi=28000, free_play_true_jedi= 40000, extra=         Extra.SUPER_BLASTERS, levels=[Level.BLOCKADERUNNER_INTRO1, Level.BLOCKADERUNNER_INTRO2, Level.BLOCKADERUNNER_A, Level.BLOCKADERUNNER_B, Level.BLOCKADERUNNER_C, Level.BLOCKADERUNNER_D, Level.BLOCKADERUNNER_OUTRO1, Level.BLOCKADERUNNER_OUTRO2, Level.BLOCKADERUNNER_STATUS])
     TATOOINE =         31, dict(episode_index= 3, area_index= 1, readable_name="Through The Jundland Wastes", flags=AreaFlag(0x0010), story_true_jedi=60000, free_play_true_jedi= 90000, extra=             Extra.FAST_FORCE, levels=[Level.TATOOINE_INTRO, Level.TATOOINE_A, Level.TATOOINE_B, Level.TATOOINE_C, Level.TATOOINE_D, Level.TATOOINE_E, Level.TATOOINE_OUTRO, Level.TATOOINE_STATUS])
     MOSEISLEY =        32, dict(episode_index= 3, area_index= 2, readable_name=       "Mos Eisley Spaceport", flags=AreaFlag(0x0010), story_true_jedi=60000, free_play_true_jedi=100000, extra=      Extra.SUPER_LIGHTSABERS, levels=[Level.MOSEISLEY_INTRO, Level.MOSEISLEY_A, Level.MOSEISLEY_B, Level.MOSEISLEY_C, Level.MOSEISLEY_D, Level.MOSEISLEY_E, Level.MOSEISLEY_OUTRO1, Level.MOSEISLEY_OUTRO2, Level.MOSEISLEY_OUTRO3, Level.MOSEISLEY_STATUS])

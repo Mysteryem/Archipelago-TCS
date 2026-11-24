@@ -20,7 +20,7 @@ _MAJOR, _MINOR, _PATCH = map(int, _MANIFEST["world_version"].split("."))
 AP_WORLD_VERSION: tuple[int, int, int] = (_MAJOR, _MINOR, _PATCH)
 del _MANIFEST
 # Logic version, used for Universal Tracker compatibility across patch versions.
-UT_LOGIC_VERSION = 1
+UT_LOGIC_VERSION = 2
 
 CHAPTER_SPECIFIC_FLAGS = (
         CAN_WEAR_HAT_AND_GRAPPLE

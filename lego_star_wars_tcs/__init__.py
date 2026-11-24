@@ -51,6 +51,7 @@ from .data_storage import (
     COMPLETED_BONUSES_KEY,
     COLLECTED_POWER_BRICKS_KEY,
     MINIKIT_GOAL_SUBMITTED_KEY,
+    unformat_datastorage_key,
 )
 
 # 1 byte to write the length
@@ -214,26 +215,24 @@ class LegoStarWarsTCSWorld(World):
             self.ut_disconnected_power_brick_events = {}
             self.ut_disconnected_boss_events = {}
             self.ut_datastorage_key_to_disconnected_dict = {
-                k.format(team=0, player=self.player): v for k, v in {
-                    COMPLETED_FREE_PLAY_KEY: (
-                        self.ut_disconnected_free_play_completion_events,
-                        # Bosses are currently implemented by completing the chapter, so share the same datastorage key.
-                        self.ut_disconnected_boss_events,
-                    ),
-                    COMPLETED_TRUE_JEDI_KEY: (
-                        self.ut_disconnected_true_jedi_gold_brick_events,
-                    ),
-                    COMPLETED_10_MINIKITS_KEY: (
-                        self.ut_disconnected_10_minikits_gold_brick_events,
-                    ),
-                    COMPLETED_BONUSES_KEY: (
-                        # TODO: Bonus completion should use the same datastorage as free play completion.
-                        self.ut_disconnected_bonus_completion_events,
-                    ),
-                    COLLECTED_POWER_BRICKS_KEY: (
-                        self.ut_disconnected_power_brick_events,
-                    ),
-                }.items()
+                COMPLETED_FREE_PLAY_KEY: (
+                    self.ut_disconnected_free_play_completion_events,
+                    # Bosses are currently implemented by completing the chapter, so share the same datastorage key.
+                    self.ut_disconnected_boss_events,
+                ),
+                COMPLETED_TRUE_JEDI_KEY: (
+                    self.ut_disconnected_true_jedi_gold_brick_events,
+                ),
+                COMPLETED_10_MINIKITS_KEY: (
+                    self.ut_disconnected_10_minikits_gold_brick_events,
+                ),
+                COMPLETED_BONUSES_KEY: (
+                    # TODO: Bonus completion should use the same datastorage as free play completion.
+                    self.ut_disconnected_bonus_completion_events,
+                ),
+                COLLECTED_POWER_BRICKS_KEY: (
+                    self.ut_disconnected_power_brick_events,
+                ),
             }
             self.ut_minikit_goal_submitted_key = MINIKIT_GOAL_SUBMITTED_KEY.format(team=0, player=self.player)
 
@@ -595,25 +594,37 @@ class LegoStarWarsTCSWorld(World):
 
     @staticmethod
     def interpret_slot_data(slot_data: dict[str, Any]) -> dict[str, Any] | None:
-        slot_data_version = tuple(slot_data["apworld_version"])
-        # Allow connecting only if the APWorld major and minor version matches, and if there are no logic changes in the
-        # case that the APWorld versions are not the same.
-        if (slot_data_version[:2] != constants.AP_WORLD_VERSION[:2]
-                or slot_data["logic_version"] != constants.UT_LOGIC_VERSION):
-            raise TCSUniversalTrackerAPWorldVersionMismatchError(
-                f"LSW TCS version error: The version of the apworld used to generate this world ({slot_data_version})"
-                f" does not have matching logic with the version of your installed apworld ({constants.AP_WORLD_VERSION})."
-            )
+        slot_data_options = TCSSlotDataOptions.from_slot_data(slot_data)
+        ut_logic_version = slot_data_options.logic_version
+        if not ut_logic_version.matches_client():
+            client_logger = logging.getLogger("Client")
+            slot_data_version = slot_data_options.apworld_version.value
+            if ut_logic_version.is_close_enough():
+                client_logger.warning(
+                    "LSW TCS Logic Version Warning: The version of the APWorld used to generate this multiworld (%s) "
+                    "does not have matching logic with the version of your installed APWorld (%s), so Universal "
+                    "Tracker may be inaccurate in some places.",
+                    slot_data_version,
+                    constants.AP_WORLD_VERSION,
+                )
+            else:
+                # The client catches this exception. Universal Tracker will be effectively disabled, but the client will
+                # still run.
+                raise TCSUniversalTrackerAPWorldVersionMismatchError(
+                    f"LSW TCS Logic Version Error: The version of the apworld used to generate this world "
+                    f"({slot_data_version}) does not have compatible logic with the version of your installed apworld "
+                    f"({constants.AP_WORLD_VERSION}). Universal Tracker support will be disabled."
+                )
         return slot_data
 
-    def _ut_connect_deferred_area_events(self, found_key: str, data_storage_value: Iterable[Any]) -> None:
+    def _ut_connect_deferred_area_events(self, unformatted_key: str, data_storage_value: Iterable[Any]) -> None:
         if data_storage_value is None:
             # Likely means that no value has been set on the server's datastorage yet.
             return
         if not isinstance(data_storage_value, Iterable):
-            raise Exception(f"Expected an Iterable for datastorage key {found_key}, but got {data_storage_value} of "
-                            f"type {type(data_storage_value)}")
-        area_to_disconnected_entrance_dicts = self.ut_datastorage_key_to_disconnected_dict[found_key]
+            raise Exception(f"Expected an Iterable for datastorage key {unformatted_key}, but got {data_storage_value} "
+                            f"of type {type(data_storage_value)}")
+        area_to_disconnected_entrance_dicts = self.ut_datastorage_key_to_disconnected_dict[unformatted_key]
         for area_to_disconnected_entrance in area_to_disconnected_entrance_dicts:
             for area_id in data_storage_value:
                 if area_id not in area_to_disconnected_entrance:
@@ -635,10 +646,11 @@ class LegoStarWarsTCSWorld(World):
 
     def reconnect_found_entrances(self, found_key: str, data_storage_value: Any):
         """UT-specific method for handling deferred entrances. The name of the method must not be changed."""
-        self.log_info("Received data storage key %s with value %s", found_key, data_storage_value)
-        if found_key in self.ut_datastorage_key_to_disconnected_dict:
-            self._ut_connect_deferred_area_events(found_key, data_storage_value)
-        elif found_key == self.ut_minikit_goal_submitted_key:
+        unformatted_key = unformat_datastorage_key(found_key)
+        self.log_info("Received data storage key %s (%s) with value %s", found_key, unformatted_key, data_storage_value)
+        if unformatted_key in self.ut_datastorage_key_to_disconnected_dict:
+            self._ut_connect_deferred_area_events(unformatted_key, data_storage_value)
+        elif unformatted_key == self.ut_minikit_goal_submitted_key:
             self._ut_connect_minikit_goal_submitted_event(data_storage_value)
         else:
             # Probably should not happen, but who knows with Universal Tracker.

@@ -1,1 +1,1 @@
-{"game": "Lego Star Wars: The Complete Saga", "world_version": "2.0.0", "minimum_ap_version": "0.6.8", "_comment_minimum_ap_version": ["Empty And() rules are bugged in AP 0.6.7, and fixed in AP 0.6.8"], "authors": ["Mysteryem"], "compatible_version": 7, "version": 7}
+{"game": "Lego Star Wars: The Complete Saga", "world_version": "2.0.1", "minimum_ap_version": "0.6.8", "_comment_minimum_ap_version": ["Empty And() rules are bugged in AP 0.6.7, and fixed in AP 0.6.8"], "authors": ["Mysteryem"], "compatible_version": 7, "version": 7}

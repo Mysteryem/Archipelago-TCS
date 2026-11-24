@@ -206,20 +206,20 @@ NEGOTIATIONS = Chapter(
         "Minikit Behind Left High Force Field": minikit_data(
             R_HIGH_FORCE_FIELDS_ROOM,
             logic_options(
-                base=HasAbility(PROTOCOL_PANEL),
+                base=HasAbility(SHORTIE),
                 # Allow Yoda Clip to activate the button.
                 # You can also Yoda Grab the minikit through the force field.
-                hard=HasAbility(PROTOCOL_PANEL) | CAN_YODA_CLIP,
+                hard=HasAbility(SHORTIE) | CAN_YODA_CLIP,
             ),
             pickup_name="m_pup5",
         ),
         "Minikit Behind Right High Force Field": minikit_data(
             R_HIGH_FORCE_FIELDS_ROOM,
             logic_options(
-                base=HasAbility(PROTOCOL_PANEL),
+                base=HasAbility(SHORTIE),
                 # Allow Yoda Clip to activate the button.
                 # You can also Yoda Grab the minikit through the force field.
-                hard=HasAbility(PROTOCOL_PANEL) | CAN_YODA_CLIP,
+                hard=HasAbility(SHORTIE) | CAN_YODA_CLIP,
             ),
             er_rule=logic_options(
                 # Disable the force field with SHORTIE, stack 3 boxes, double jump on top, then double jump to the

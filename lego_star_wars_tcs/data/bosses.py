@@ -133,5 +133,5 @@ assert len([boss.area for boss in Boss]) == len({boss.area for boss in Boss}) + 
 
 _AREA_TO_BOSS = {
     # VADER_VADER is an alternative to ANAKIN, so is only ever accessed manually.
-    boss.area: boss for boss in Boss if boss is not boss.is_alt_boss
+    boss.area: boss for boss in Boss if not boss.is_alt_boss
 }

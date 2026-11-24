@@ -844,7 +844,21 @@ DAGOBAH = helper.make_chapter(
         R_FINAL_AREA_ACROSS_BRIDGE: (
             ExitData(
                 "Chapter Completion",
-                HasAllAbilities(ASTROMECH_PANEL | TRAINED_JEDI),
+                logic_options(
+                    strict=False,
+                    base=HasAllAbilities(ASTROMECH_PANEL | TRAINED_JEDI),
+                ).or_rule(
+                    # Having any Jedi unlocked allows Custom Characters to have lightsabers and use the force. Only
+                    # LUKE_SKYWALKER_DAGOBAH is hardcoded to be unable to lift the X-wing at the end of the level, so
+                    # custom characters can be used in place of Luke.
+                    # Maybe this should be moderate+ due to its obscurity, since this might be the only logic specific
+                    # to just the custom characters.
+                    apply_to="normal+",
+                    rule=And(
+                        Character.LUKE_SKYWALKER_DAGOBAH.has(),
+                        Character.has_any(Character.STRANGER_1, Character.STRANGER_2)
+                    ),
+                ),
             ),
         ),
     },

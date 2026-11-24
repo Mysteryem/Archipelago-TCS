@@ -5,7 +5,7 @@ from collections import Counter
 from dataclasses import dataclass, field, Field
 from enum import IntFlag, verify, UNIQUE, CONTINUOUS, NAMED_FLAGS
 from types import UnionType, NoneType
-from typing import Any, TYPE_CHECKING, Iterable, Mapping, Union, Optional, get_origin, Self, TypeVar, cast
+from typing import Any, TYPE_CHECKING, Iterable, Mapping, Union, Optional, get_origin, Self, TypeVar, cast, ClassVar
 from typing_extensions import override
 
 from Options import Option, Range, Toggle, T
@@ -166,14 +166,31 @@ class ApWorldVersion(NamelessValuesOption[tuple[int, int, int]]):
 
 
 class LogicVersion(Range):
+    """
+    Rather than using semver, LogicVersion uses a 'distance' metric to determine compatibility and severity, so that
+    small changes are allowed with a warning, but many small accumulated changes are disallowed.
+
+    This LogicVersion can sort of be treated like a fourth number after the x.y.z for semver for the APWorld version.
+
+    Any difference greater than 10 is disallowed.
+    Any other difference produces a warning that logic may not match. Logic could still match because the changes to
+    logic might not affect the options the player chose.
+    """
     range_start = 1
     range_end = 999_999_999
+    MAX_DISTANCE: ClassVar[int] = 10
 
     @classmethod
     def from_any(cls, data: Any) -> Self:
         if isinstance(data, World) and isinstance(data, LegoStarWarsTCSWorld):
             return cls(constants.UT_LOGIC_VERSION)
         return cast(Self, super().from_any(data))
+
+    def matches_client(self) -> bool:
+        return self.value == constants.UT_LOGIC_VERSION
+
+    def is_close_enough(self) -> bool:
+        return abs(constants.UT_LOGIC_VERSION - self.value) <= self.MAX_DISTANCE
 
 
 class EnabledChapters(AreaOptionSet):

@@ -624,16 +624,9 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
     def on_package(self, cmd: str, args: dict):
         warn_universal_tracker_is_disabled = False
         if UNIVERSAL_TRACKER_LOADED and cmd == "Connected":
-            try:
-                super().on_package(cmd, args)
-            except TCSUniversalTrackerAPWorldVersionMismatchError:
-                # If the multiworld apworld version does not match the client apworld version, TCS's Universal Tracker
-                # support raises this exception to reject Universal Tracker usage when the apworld versions do not match
-                # because there could be logic differences between apworld versions.
-                # The client, however, is allowed to connect to older versions that it has backwards compatibility for,
-                # so if the player has Universal Tracker installed, connecting should be allowed to continue, even if
-                # Universal Tracker will not be usable.
-                warn_universal_tracker_is_disabled = True
+            # Call super() only after the APWorld version check is complete, so that users don't get UT complaining
+            # about incompatible logic and *then* the client saying it is incompatible.
+            pass
         else:
             super().on_package(cmd, args)
 
@@ -669,9 +662,21 @@ class LegoStarWarsTheCompleteSagaContext(CommonContext):
                     self.last_connected_seed_name = None
                     Utils.async_start(self.disconnect())
                     return
-                if warn_universal_tracker_is_disabled:
-                    logger.info("Universal Tracker features are disabled due to the client APWorld version not matching"
-                                " the APWorld version that generated the multiworld.")
+                if UNIVERSAL_TRACKER_LOADED:
+                    # The super call is delayed so that the _validate_version check runs first.
+                    try:
+                        super().on_package(cmd, args)
+                    except TCSUniversalTrackerAPWorldVersionMismatchError:
+                        # If the multiworld apworld version does not match the client apworld version, TCS's Universal
+                        # Tracker support raises this exception to reject Universal Tracker usage when the apworld logic
+                        # versions vary too much.
+                        # The client, however, is allowed to connect to older versions that it has backwards
+                        # compatibility event if the logic versions differ too much, so if the player has Universal
+                        # Tracker installed, connecting should be allowed to continue, even if Universal Tracker will
+                        # not be usable.
+                        logger.info(
+                            "Universal Tracker features are disabled due to the client APWorld version having logic too"
+                            " different to the APWorld version that generated the multiworld.")
             else:
                 logger.error("Error: slot_data missing from Connected message, something is probably broken.")
                 Utils.async_start(self.disconnect())

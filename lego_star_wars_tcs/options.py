@@ -56,7 +56,7 @@ _CHAPTER_AREA_OPTIONS = {
 
 
 _BOSS_KEY_TO_BOSS = {
-    f"{boss.unique_name} ({boss.area.get_short_name()})": boss for boss in Boss if Boss is not boss.is_alt_boss
+    f"{boss.unique_name} ({boss.area.get_short_name()})": boss for boss in Boss if not boss.is_alt_boss
 }
 
 
@@ -485,7 +485,7 @@ class AllowedBosses(OptionSet):
         - Boba Fett (5-6) # Betrayal Over Bespin
         - Rancor (6-1) # Jabba's Palace
         - Boba Fett (6-2) # The Great Pit Of Carkoon
-        - Darth Sidious (6-5) # Jedi Destiny
+        - The Emperor (6-5) # Jedi Destiny
         - Death Star II (6-6) # Into The Death Star
     """
     display_name = "Bosses To Pick From"

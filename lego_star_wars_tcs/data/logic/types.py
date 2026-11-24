@@ -100,13 +100,13 @@ class ChapterHelper:
 
     def can_reach_region(self, region_name: str):
         self._regions_used_in_can_reach.add(region_name)
-        return CanReachRegion(f"{self.area.readable_name} - {region_name}")
+        return CanReachRegion(self.area.prefix_name(region_name))
 
     def can_reach_location(self, location_name: str):
-        return CanReachLocation(f"{self.area.readable_name} - {location_name}")
+        return CanReachLocation(self.area.prefix_name(location_name))
 
     def can_reach_entrance(self, entrance_name: str):
-        return CanReachEntrance(f"{self.area.readable_name} - {entrance_name}")
+        return CanReachEntrance(self.area.prefix_name(entrance_name))
 
     def make_chapter(
             self,
